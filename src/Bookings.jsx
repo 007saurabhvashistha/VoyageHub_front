@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
-import { ArrowUpRight, ClipboardCheck, Download, FileWarning, Lock, ShieldCheck, Upload, X } from 'lucide-react';
+import { ArrowUpRight, Check, ClipboardCheck, Download, FileWarning, Lock, Paperclip, ShieldCheck, Upload, X } from 'lucide-react';
 import {
   confirmBooking,
   confirmBookingReference,
+  answerBookingChange,
   correctGuestDetails,
   createVoucherDownloadUrl,
   getBooking,
@@ -12,6 +13,8 @@ import {
   restoreGuestDetails,
   revokeGuestDetails,
   uploadBookingVoucher,
+  requestBookingChange,
+  withdrawBookingChange,
 } from './api.js';
 import { useCan } from './capabilities.js';
 import { labelFor, useReferenceData } from './referenceData.js';
@@ -111,6 +114,10 @@ function BookingDetailModal({ bookingId, onClose, onChanged }) {
       if (result?.booking) {
         setBooking(result.booking);
         onChanged();
+      } else if (result?.change) {
+        const refreshed = await getBooking(bookingId);
+        setBooking(refreshed.booking);
+        onChanged();
       }
       return result;
     } catch (requestError) {
@@ -151,6 +158,7 @@ function BookingDetailModal({ bookingId, onClose, onChanged }) {
               <div><dt>Status</dt><dd><span className={`status-pill ${statusPill[booking.status]}`}><i />{labelFor(reference?.bookingStatuses, booking.status)}</span></dd></div>
               <div><dt>Travel</dt><dd>{travelText(booking)}</dd></div>
               <div><dt>Travellers</dt><dd>{guestSummary(booking)}{booking.roomingRequired ? ` / ${booking.roomCount} room(s), ${booking.offer.roomType}` : ''}</dd></div>
+              {booking.offer.optionLabel && <div><dt>Awarded option</dt><dd>{booking.offer.optionLabel}{booking.offer.hotelCategory ? ` / ${labelFor(reference?.hotelCategories, booking.offer.hotelCategory)}` : ''}</dd></div>}
               <div><dt>Booking reference</dt><dd>{booking.sellerConfirmationNumber ? `${booking.sellerConfirmationNumber}${booking.sellerConfirmationNote ? ` (${booking.sellerConfirmationNote})` : ''}` : 'Not confirmed by the seller yet'}</dd></div>
               <div><dt>Guest details</dt><dd>{guestDetailsState(booking)}{guest && !guest.purgedAt ? ` / deleted on ${guest.deletionDueOn}` : ''}</dd></div>
               {guest?.revokedReason && <div><dt>Revocation reason</dt><dd>{guest.revokedReason}</dd></div>}
@@ -183,6 +191,8 @@ function BookingDetailModal({ bookingId, onClose, onChanged }) {
             )}
             {accessLog && <AccessLog entries={accessLog} reference={reference} />}
 
+            <BookingChanges booking={booking} reference={reference} canManage={canManage} busy={busy} onRun={run} />
+
             {!isAgency && canManage && confirmed && <SellerConfirmation booking={booking} busy={busy} onSubmit={(number, note) => run(() => confirmBookingReference(bookingId, number, note))} />}
             <Vouchers booking={booking} canManage={canManage} onError={setError} onUploaded={async () => setBooking((await getBooking(bookingId)).booking)} />
           </>
@@ -191,6 +201,77 @@ function BookingDetailModal({ bookingId, onClose, onChanged }) {
         ))}
       </section>
     </div>
+  );
+}
+
+function BookingChanges({ booking, reference, canManage, busy, onRun }) {
+  const [changeType, setChangeType] = useState('amendment');
+  const [message, setMessage] = useState('');
+  const [startDate, setStartDate] = useState(booking.travelStartDate ?? '');
+  const [endDate, setEndDate] = useState(booking.travelEndDate ?? '');
+  const [nights, setNights] = useState(String(booking.nights));
+  const [rooms, setRooms] = useState(String(booking.roomCount));
+  const [responseNote, setResponseNote] = useState('');
+  const [error, setError] = useState('');
+  const hasPending = booking.changes?.some((change) => change.status === 'pending');
+  const canRequest = canManage && ['confirmation_pending', 'booked'].includes(booking.status) && !hasPending;
+
+  async function submit(event) {
+    event.preventDefault();
+    setError('');
+    const proposedChanges = changeType === 'amendment' ? {
+      ...(startDate && endDate ? { travel_start_date: startDate, travel_end_date: endDate, nights: Number(nights) } : {}),
+      ...(rooms ? { room_count: Number(rooms) } : {}),
+    } : {};
+    const result = await onRun(() => requestBookingChange(booking.id, { change_type: changeType, message, proposed_changes: proposedChanges }));
+    if (result) setMessage('');
+  }
+
+  async function answer(change, action) {
+    setError('');
+    const result = await onRun(() => answerBookingChange(booking.id, change.id, action, responseNote));
+    if (result) setResponseNote('');
+  }
+
+  async function withdraw(change) {
+    setError('');
+    await onRun(() => withdrawBookingChange(booking.id, change.id));
+  }
+
+  return (
+    <section className="booking-change-section">
+      <div className="section-heading"><div><p className="eyebrow">AFTER BOOKING</p><h3>Changes and cancellations</h3></div></div>
+      {booking.changes?.length > 0 && <ol className="booking-change-list">{[...booking.changes].reverse().map((change) => (
+        <li key={change.id}>
+          <div className="booking-change-heading"><strong>{labelFor(reference?.bookingChangeTypes, change.type)}</strong><span className={`status-pill ${change.status === 'accepted' ? 'open' : change.status === 'pending' ? 'draft' : 'cancelled'}`}><i />{labelFor(reference?.bookingChangeStatuses, change.status)}</span></div>
+          <p>{change.message}</p>
+          {change.type === 'amendment' && Object.entries(change.proposedChanges ?? {}).filter(([, value]) => value != null).map(([key, value]) => <small key={key}>{key.replaceAll('_', ' ')}: {value}</small>)}
+          {change.responseNote && <small>Response: {change.responseNote}</small>}
+          <time>{new Date(change.createdAt).toLocaleString()}</time>
+          {change.status === 'pending' && change.isMine
+            ? <button className="text-button" disabled={busy} onClick={() => withdraw(change)}>Withdraw request</button>
+            : change.status === 'pending' && canManage && <div className="booking-change-response">
+                <input className="form-input" value={responseNote} onChange={(event) => setResponseNote(event.target.value)} maxLength="1000" placeholder="Optional response note" aria-label="Response note" />
+                <button className="primary-button" disabled={busy} onClick={() => answer(change, 'accept')}><Check size={14} />Accept</button>
+                <button className="secondary-button" disabled={busy} onClick={() => answer(change, 'decline')}>Decline</button>
+              </div>}
+        </li>
+      ))}</ol>}
+      {canRequest && <form className="booking-change-form" onSubmit={submit}>
+        <label className="field-label">Request type<select className="form-select" value={changeType} onChange={(event) => setChangeType(event.target.value)}>{reference?.bookingChangeTypes.map((type) => <option key={type.value} value={type.value}>{type.label}</option>)}</select></label>
+        {changeType === 'amendment' && <div className="request-form-grid">
+          <label className="field-label">New arrival<input className="form-input" type="date" value={startDate} onChange={(event) => setStartDate(event.target.value)} required /></label>
+          <label className="field-label">New departure<input className="form-input" type="date" value={endDate} onChange={(event) => setEndDate(event.target.value)} required /></label>
+          <label className="field-label">Nights<input className="form-input" type="number" min="1" max={reference?.limits.bookingChanges.maxNights} value={nights} onChange={(event) => setNights(event.target.value)} required /></label>
+          <label className="field-label">Rooms<input className="form-input" type="number" min="1" max={reference?.limits.bookingChanges.maxRooms} value={rooms} onChange={(event) => setRooms(event.target.value)} /></label>
+        </div>}
+        <label className="field-label">Message to the other party<textarea className="form-input" value={message} onChange={(event) => setMessage(event.target.value)} minLength="5" maxLength="1000" required placeholder={changeType === 'cancellation' ? 'Why does this booking need to be cancelled?' : 'Describe what needs to change'} /></label>
+        <small className="table-secondary">The other party must accept before an amendment takes effect or a cancellation is completed.</small>
+        {error && <p className="auth-error" role="alert">{error}</p>}
+        <div className="modal-actions"><button className="primary-button" disabled={busy || (changeType === 'amendment' && (!startDate || !endDate))}><ArrowUpRight size={14} />Send request</button></div>
+      </form>}
+      {booking.status === 'cancelled' && <p className="privacy-note">This booking is cancelled. Its change history remains available to both parties.</p>}
+    </section>
   );
 }
 

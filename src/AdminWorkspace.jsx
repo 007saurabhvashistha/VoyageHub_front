@@ -1,14 +1,106 @@
 import { useEffect, useState } from 'react';
 import { BadgeCheck, Building2, ExternalLink, Globe2, Hotel, LogOut, Mail, RefreshCw, ShieldCheck } from 'lucide-react';
-import { createDocumentDownloadUrl, decideSellerVerification, getNotificationOutbox, listPendingSellerProfiles, logoutAccount, retryNotificationOutbox } from './api.js';
+import { createDocumentDownloadUrl, decideAgencyVerification, decideSellerVerification, getNotificationOutbox, listPendingAgencyVerifications, listPendingSellerProfiles, logoutAccount, retryNotificationOutbox } from './api.js';
 import { MfaSecurityPanel } from './MfaSecurity.jsx';
 import { AdminModeration } from './AdminModeration.jsx';
 import { AdminDestinations, AdminLegalDocuments, AdminOperations, AdminSettings } from './AdminPlatform.jsx';
 import { documentStateClass, formatBytes } from './SellerDocuments.jsx';
 import { labelFor, useReferenceData } from './referenceData.js';
 
-function AdminWorkspace({ account }) {
+async function openSignedDocument(documentId) {
+  // Open the tab synchronously so popup blockers allow it, then point it at the short-lived signed link.
+  const tab = window.open('about:blank', '_blank');
+  if (tab) tab.opener = null;
+  try {
+    const { url } = await createDocumentDownloadUrl(documentId);
+    if (tab) tab.location.href = url;
+    else window.location.assign(url);
+  } catch (error) {
+    tab?.close();
+    throw error;
+  }
+}
+
+function DocumentChecklist({ documents, openingDocumentId, onOpen }) {
   const { data: reference } = useReferenceData();
+  return <ul className="verification-documents">{documents.requirements.map((item) => <li key={item.type}>
+    <strong>{item.label}{item.required ? '' : ' (optional)'}</strong>
+    <span className={`status-pill ${documentStateClass(item.document)}`}><i />{item.document ? labelFor(reference?.documentScanStatuses, item.document.scanStatus) : 'Missing'}</span>
+    {item.document && <span>{item.document.filename} / {formatBytes(item.document.sizeBytes)}</span>}
+    {item.document?.scanStatus === 'clean' && !item.document.removedAt && <button className="text-button" disabled={openingDocumentId === item.document.id} onClick={() => onOpen(item.document)}><ExternalLink size={13} />Open</button>}
+  </li>)}</ul>;
+}
+
+function AgencyVerificationQueue() {
+  const [agencies, setAgencies] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [reasons, setReasons] = useState({});
+  const [evidenceReviewed, setEvidenceReviewed] = useState({});
+  const [processingId, setProcessingId] = useState('');
+  const [openingDocumentId, setOpeningDocumentId] = useState('');
+
+  async function refresh() {
+    setLoading(true);
+    try {
+      setAgencies((await listPendingAgencyVerifications()).agencies);
+      setError('');
+    } catch (requestError) {
+      setError(requestError.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => { refresh(); }, []);
+
+  async function decide(agency, decision) {
+    setProcessingId(agency.organizationId);
+    setError('');
+    try {
+      await decideAgencyVerification(agency.organizationId, decision, reasons[agency.organizationId].trim());
+      setAgencies((current) => current.filter((item) => item.organizationId !== agency.organizationId));
+    } catch (requestError) {
+      setError(requestError.message);
+    } finally {
+      setProcessingId('');
+    }
+  }
+
+  async function openDocument(document) {
+    setOpeningDocumentId(document.id);
+    setError('');
+    try {
+      await openSignedDocument(document.id);
+    } catch (requestError) {
+      setError(requestError.message);
+    } finally {
+      setOpeningDocumentId('');
+    }
+  }
+
+  return <>
+    <div className="page-heading admin-heading outbox-heading"><div><p className="eyebrow">TRUST AND SAFETY</p><h2>Agency verification</h2><p className="page-subtitle">Approve agencies whose business documents check out. Approval adds the verified badge sellers see on their requests.</p></div><button className="secondary-button" onClick={refresh} disabled={loading}><RefreshCw size={15} />Refresh</button></div>
+    {error && <div className="auth-error" role="alert">{error}</div>}
+    <section className="surface-section admin-queue">
+      {loading ? <div className="empty-state">Loading agency queue...</div> : agencies.length ? agencies.map((agency) => {
+        const reason = reasons[agency.organizationId]?.trim() ?? '';
+        const blocked = processingId === agency.organizationId || !evidenceReviewed[agency.organizationId] || reason.length < 5;
+        return <article className="verification-row" key={agency.organizationId}>
+          <div className="verification-main"><div className="verification-title"><span className="role-option-icon"><Building2 size={17} /></span><div><h2>{agency.organizationName}</h2><span>agency / {agency.countryCode}</span></div><span className="status-pill draft"><i />Pending</span></div>
+            <div className="verification-facts"><span>Submitted {new Date(agency.submittedAt).toLocaleDateString()}</span></div>
+            <DocumentChecklist documents={agency.documents} openingDocumentId={openingDocumentId} onOpen={openDocument} />
+            <label className="evidence-confirm"><input type="checkbox" checked={Boolean(evidenceReviewed[agency.organizationId])} onChange={(event) => setEvidenceReviewed((current) => ({ ...current, [agency.organizationId]: event.target.checked }))} />I reviewed the agency's verification evidence.</label>
+            <label className="field-label">Decision reason<textarea value={reasons[agency.organizationId] ?? ''} onChange={(event) => setReasons((current) => ({ ...current, [agency.organizationId]: event.target.value }))} minLength="5" maxLength="500" placeholder="Record the review outcome (shared with the agency)" /></label>
+          </div>
+          <div className="verification-actions"><button className="secondary-button reject-button" disabled={blocked} onClick={() => decide(agency, 'rejected')}>Reject</button><button className="primary-button" disabled={blocked || !agency.documents.complete} title={agency.documents.complete ? undefined : 'Every required document must be scanned clean before approval.'} onClick={() => decide(agency, 'approved')}><BadgeCheck size={15} />Approve</button></div>
+        </article>;
+      }) : <div className="empty-state"><ShieldCheck size={24} /><strong>Queue clear</strong><span>No agencies are waiting for review.</span></div>}
+    </section>
+  </>;
+}
+
+function AdminWorkspace({ account }) {
   const [openingDocumentId, setOpeningDocumentId] = useState('');
   const [sellers, setSellers] = useState([]);
   const [reasons, setReasons] = useState({});
@@ -65,17 +157,11 @@ function AdminWorkspace({ account }) {
   }
 
   async function openDocument(document) {
-    // Open the tab synchronously so popup blockers allow it, then point it at the short-lived signed link.
-    const tab = window.open('about:blank', '_blank');
-    if (tab) tab.opener = null;
     setOpeningDocumentId(document.id);
     setError('');
     try {
-      const { url } = await createDocumentDownloadUrl(document.id);
-      if (tab) tab.location.href = url;
-      else window.location.assign(url);
+      await openSignedDocument(document.id);
     } catch (requestError) {
-      tab?.close();
       setError(requestError.message);
     } finally {
       setOpeningDocumentId('');
@@ -119,12 +205,7 @@ function AdminWorkspace({ account }) {
             return <article className="verification-row" key={seller.organizationId}>
               <div className="verification-main"><div className="verification-title"><span className="role-option-icon"><Icon size={17} /></span><div><h2>{seller.organizationName}</h2><span>{seller.businessType} / {seller.countryCode}</span></div><span className="status-pill draft"><i />Pending</span></div>
                 <div className="verification-facts"><span><Globe2 size={14} />{seller.businessType === 'dmc' ? seller.coverageDestinations.join(', ') : seller.propertyCity}</span><span>Submitted {new Date(seller.submittedAt).toLocaleDateString()}</span></div>
-                <ul className="verification-documents">{seller.documents.requirements.map((item) => <li key={item.type}>
-                  <strong>{item.label}{item.required ? '' : ' (optional)'}</strong>
-                  <span className={`status-pill ${documentStateClass(item.document)}`}><i />{item.document ? labelFor(reference?.documentScanStatuses, item.document.scanStatus) : 'Missing'}</span>
-                  {item.document && <span>{item.document.filename} / {formatBytes(item.document.sizeBytes)}</span>}
-                  {item.document?.scanStatus === 'clean' && !item.document.removedAt && <button className="text-button" disabled={openingDocumentId === item.document.id} onClick={() => openDocument(item.document)}><ExternalLink size={13} />Open</button>}
-                </li>)}</ul>
+                <DocumentChecklist documents={seller.documents} openingDocumentId={openingDocumentId} onOpen={openDocument} />
                 <label className="evidence-confirm"><input type="checkbox" checked={Boolean(evidenceReviewed[seller.organizationId])} onChange={(event) => setEvidenceReviewed((current) => ({ ...current, [seller.organizationId]: event.target.checked }))} />I reviewed the seller's verification evidence.</label>
                 <label className="field-label">Decision reason<textarea value={reasons[seller.organizationId] ?? ''} onChange={(event) => setReasons((current) => ({ ...current, [seller.organizationId]: event.target.value }))} minLength="5" maxLength="500" placeholder="Record the review outcome" /></label>
               </div>
@@ -133,6 +214,7 @@ function AdminWorkspace({ account }) {
           }) : <div className="empty-state"><ShieldCheck size={24} /><strong>Queue clear</strong><span>There are no seller profiles awaiting review.</span></div>}
         </section>
         <p className="admin-policy-note">Approval is audited and enables request matching and offer submission for that seller organization.</p>
+        <AgencyVerificationQueue />
         <AdminModeration />
         <AdminSettings />
         <AdminOperations />

@@ -1,10 +1,12 @@
-import { useState } from 'react';
-import { Plus, Trash2, X } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { Download, Paperclip, Plus, Trash2, X } from 'lucide-react';
 import { addDays, endOfDay, format, parseISO } from 'date-fns';
+import { createAttachmentDownloadUrl, getMarketplaceOffer, removeAttachment } from './api.js';
 import { formatMinor, toMinorUnits } from './money.js';
-import { useReferenceData } from './referenceData.js';
+import { labelFor, useReferenceData } from './referenceData.js';
 
 const emptyLine = (type) => ({ itemType: type, description: '', quantity: '1', unitPrice: '' });
+const emptyOption = () => ({ label: '', hotelCategory: '', roomType: '', mealPlan: '', price: '', notes: '' });
 const optionalNumber = (value) => (value === '' || value == null ? null : Number(value));
 
 export function OfferFormModal({ role, target, roomTypes = [], onClose, onSubmit }) {
@@ -12,14 +14,51 @@ export function OfferFormModal({ role, target, roomTypes = [], onClose, onSubmit
   const { data: reference } = useReferenceData();
   const [currency, setCurrency] = useState('');
   const [lines, setLines] = useState([]);
+  const [options, setOptions] = useState([]);
+  const [files, setFiles] = useState([]);
+  const [existingFiles, setExistingFiles] = useState([]);
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const today = new Date();
   const activeCurrency = currency || reference?.defaults.currency || '';
   const lineTotalMinor = lines.reduce((sum, line) => sum + (line.unitPrice === '' ? 0 : toMinorUnits(line.unitPrice, activeCurrency) * Number(line.quantity || 0)), 0);
+  const fileSlots = (reference?.limits.maxOfferAttachments ?? 0) - existingFiles.length - files.length;
+
+  useEffect(() => {
+    if (!target.reviseOfferId) return undefined;
+    let active = true;
+    getMarketplaceOffer(target.reviseOfferId)
+      .then((result) => active && setExistingFiles(result.offer.attachments ?? []))
+      .catch((requestError) => active && setError(requestError.message));
+    return () => { active = false; };
+  }, [target.reviseOfferId]);
+
+  async function removeExisting(attachment) {
+    try {
+      await removeAttachment(attachment.id);
+      setExistingFiles((current) => current.filter((item) => item.id !== attachment.id));
+    } catch (requestError) {
+      setError(requestError.message);
+    }
+  }
+
+  function addFiles(input) {
+    const picked = [...input.files].slice(0, Math.max(fileSlots, 0));
+    input.value = '';
+    const tooLarge = picked.find((file) => file.size > reference.limits.documentUpload.maxBytes);
+    if (tooLarge) {
+      setError(`${tooLarge.name} is larger than ${reference.limits.documentUpload.maxBytes / (1024 * 1024)} MB.`);
+      return;
+    }
+    setFiles((current) => [...current, ...picked]);
+  }
 
   function updateLine(index, field, value) {
     setLines((current) => current.map((line, lineIndex) => lineIndex === index ? { ...line, [field]: value } : line));
+  }
+
+  function updateOption(index, field, value) {
+    setOptions((current) => current.map((option, optionIndex) => optionIndex === index ? { ...option, [field]: value } : option));
   }
 
   async function submit(event) {
@@ -36,6 +75,14 @@ export function OfferFormModal({ role, target, roomTypes = [], onClose, onSubmit
       deposit_percent: optionalNumber(form.get('deposit_percent')),
       balance_due_days_before_travel: optionalNumber(form.get('balance_due_days')),
       payment_notes: form.get('payment_notes') || null,
+      option_label: options.length ? form.get('option_label').trim() : null,
+      options: options.map((option) => ({
+        label: option.label.trim(),
+        notes: option.notes.trim() || null,
+        ...(isHotel
+          ? { room_type: option.roomType.trim(), meal_plan: option.mealPlan || null, rate_per_night_minor: toMinorUnits(option.price, activeCurrency) }
+          : { hotel_category: optionalNumber(option.hotelCategory), total_minor: toMinorUnits(option.price, activeCurrency) }),
+      })),
     };
     const payload = isHotel
       ? {
@@ -49,6 +96,7 @@ export function OfferFormModal({ role, target, roomTypes = [], onClose, onSubmit
         }
       : {
           ...terms,
+          hotel_category: optionalNumber(form.get('hotel_category')),
           total_minor: lines.length ? lineTotalMinor : toMinorUnits(form.get('amount'), activeCurrency),
           line_items: lines.map((line) => ({ item_type: line.itemType, description: line.description.trim(), quantity: Number(line.quantity), unit_price_minor: toMinorUnits(line.unitPrice, activeCurrency) })),
         };
@@ -57,7 +105,7 @@ export function OfferFormModal({ role, target, roomTypes = [], onClose, onSubmit
       return;
     }
     setSubmitting(true);
-    const failure = await onSubmit(payload);
+    const failure = await onSubmit(payload, files);
     setSubmitting(false);
     if (failure) setError(failure);
   }
@@ -66,7 +114,7 @@ export function OfferFormModal({ role, target, roomTypes = [], onClose, onSubmit
     <div className="modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
       <section className="modal offer-form-modal" role="dialog" aria-modal="true" aria-labelledby="response-modal-title">
         <div className="modal-heading">
-          <div><p className="eyebrow">{isHotel ? 'HOTEL RESPONSE' : 'DMC OFFER'}</p><h2 id="response-modal-title">{isHotel ? 'Respond to room request' : 'Prepare an offer'}</h2></div>
+          <div><p className="eyebrow">{isHotel ? 'HOTEL RESPONSE' : 'DMC OFFER'}</p><h2 id="response-modal-title">{target.reviseOfferId ? 'Revise offer for the updated trip' : isHotel ? 'Respond to room request' : 'Prepare an offer'}</h2></div>
           <button className="icon-button" aria-label="Close dialog" onClick={onClose}><X size={18} /></button>
         </div>
         <p className="modal-copy"><strong>{target.destination}</strong> / {target.requestCode} / {target.travelers} / {target.nights} nights. This offer is visible only to the requesting agency.</p>
@@ -79,6 +127,8 @@ export function OfferFormModal({ role, target, roomTypes = [], onClose, onSubmit
                 ? <output id="response-amount" className="form-input offer-total-output">{formatMinor(lineTotalMinor, activeCurrency)}</output>
                 : <input id="response-amount" name="amount" type="number" min="0.01" step="any" placeholder="0.00" required />}
             </div>
+
+            {!isHotel && <label className="field-label">Hotel category in this price<select className="form-select" name="hotel_category" defaultValue={target.hotelCategory ?? ''}><option value="">Not specified</option>{reference.hotelCategories.map((category) => <option key={category.value} value={category.value}>{category.label}</option>)}</select></label>}
 
             {!isHotel && (
               <fieldset className="line-item-editor">
@@ -107,6 +157,27 @@ export function OfferFormModal({ role, target, roomTypes = [], onClose, onSubmit
               </div>
             )}
 
+            <fieldset className="line-item-editor">
+              <legend>Alternative options ({options.length}/{reference.limits.maxOfferOptions})</legend>
+              <small className="table-secondary">Offer the same trip at other prices, for example a 3 star and a 5 star version. All options share the terms below.</small>
+              {options.length > 0 && <label className="field-label">Name of the main option<input className="form-input" name="option_label" maxLength="80" required placeholder={isHotel ? 'For example: Deluxe twin' : 'For example: 4 star'} /></label>}
+              {options.map((option, index) => (
+                <div className={`offer-option-row${isHotel ? ' hotel-option' : ''}`} key={index}>
+                  <input aria-label={`Option ${index + 1} name`} value={option.label} onChange={(event) => updateOption(index, 'label', event.target.value)} placeholder="Option name" maxLength={80} required />
+                  {isHotel
+                    ? <>
+                        <input aria-label={`Option ${index + 1} room type`} value={option.roomType} onChange={(event) => updateOption(index, 'roomType', event.target.value)} list="room-type-options" placeholder="Room type" maxLength={120} required />
+                        <select aria-label={`Option ${index + 1} meal plan`} value={option.mealPlan} onChange={(event) => updateOption(index, 'mealPlan', event.target.value)}><option value="">Meal plan</option>{reference.mealPlans.map((plan) => <option key={plan.value} value={plan.value}>{plan.label}</option>)}</select>
+                      </>
+                    : <select aria-label={`Option ${index + 1} hotel category`} value={option.hotelCategory} onChange={(event) => updateOption(index, 'hotelCategory', event.target.value)}><option value="">Hotel category</option>{reference.hotelCategories.map((category) => <option key={category.value} value={category.value}>{category.label}</option>)}</select>}
+                  <input aria-label={`Option ${index + 1} price`} type="number" min="0.01" step="any" value={option.price} onChange={(event) => updateOption(index, 'price', event.target.value)} placeholder={isHotel ? 'Rate / room / night' : 'Total price'} required />
+                  <input aria-label={`Option ${index + 1} notes`} value={option.notes} onChange={(event) => updateOption(index, 'notes', event.target.value)} placeholder="What changes (optional)" maxLength={500} />
+                  <button type="button" className="icon-button" aria-label={`Remove option ${index + 1}`} onClick={() => setOptions((current) => current.filter((_, optionIndex) => optionIndex !== index))}><Trash2 size={14} /></button>
+                </div>
+              ))}
+              <button type="button" className="secondary-button" disabled={options.length >= reference.limits.maxOfferOptions} onClick={() => setOptions((current) => [...current, emptyOption()])}><Plus size={14} />Add option</button>
+            </fieldset>
+
             <fieldset className="inclusion-picker"><legend>Included</legend>{reference.offerInclusions.map((item) => <label key={item.value}><input type="checkbox" name="inclusions" value={item.value} />{item.label}</label>)}</fieldset>
             {!isHotel && <fieldset className="inclusion-picker"><legend>Not included</legend>{reference.offerInclusions.map((item) => <label key={item.value}><input type="checkbox" name="exclusions" value={item.value} />{item.label}</label>)}</fieldset>}
 
@@ -118,6 +189,13 @@ export function OfferFormModal({ role, target, roomTypes = [], onClose, onSubmit
             </div>
             <label className="field-label">Cancellation policy<textarea className="form-input" name="cancellation_policy" maxLength="1000" placeholder="Charges by date, no-show rules" /></label>
             <label className="field-label">Payment notes<textarea className="form-input" name="payment_notes" maxLength="500" placeholder="Accepted payment methods, invoicing" /></label>
+            <fieldset className="line-item-editor">
+              <legend>Files ({existingFiles.length + files.length}/{reference.limits.maxOfferAttachments})</legend>
+              <small className="table-secondary">Itinerary PDF or photos. The agency can open them after a malware scan.</small>
+              {existingFiles.length > 0 && <AttachmentList attachments={existingFiles} onRemove={removeExisting} />}
+              {files.length > 0 && <ul className="attachment-list">{files.map((file, index) => <li key={`${file.name}-${index}`}><span><Paperclip size={13} />{file.name}</span><small>Uploads when you submit</small><button type="button" className="icon-button" aria-label={`Remove ${file.name}`} onClick={() => setFiles((current) => current.filter((_, fileIndex) => fileIndex !== index))}><Trash2 size={14} /></button></li>)}</ul>}
+              {fileSlots > 0 && <label className="secondary-button document-upload"><Plus size={14} />Add files<input type="file" multiple className="visually-hidden" accept={reference.limits.documentUpload.allowedMimeTypes.join(',')} onChange={(event) => addFiles(event.target)} /></label>}
+            </fieldset>
             <small className="table-secondary">Do not include contact details or links; offers with them are rejected.</small>
             {error && <p className="auth-error" role="alert">{error}</p>}
             <div className="modal-actions"><button type="button" className="secondary-button" onClick={onClose}>Cancel</button><button type="submit" className="primary-button" disabled={submitting}>{submitting ? 'Submitting...' : isHotel ? 'Submit room quote' : 'Submit offer'}</button></div>
@@ -140,12 +218,42 @@ export function OfferDetails({ offer }) {
   ].filter(Boolean);
   return (
     <details className="offer-details">
-      <summary>Terms{offer.lineItems?.length ? ` and ${offer.lineItems.length} price lines` : ''}</summary>
+      <summary>Terms{offer.lineItems?.length ? ` and ${offer.lineItems.length} price lines` : ''}{offer.attachments?.length ? ` / ${offer.attachments.length} file(s)` : ''}</summary>
       {terms.length > 0 && <p>{terms.join(' / ')}</p>}
       {offer.cancellationPolicy && <p><strong>Cancellation:</strong> {offer.cancellationPolicy}</p>}
       {offer.paymentNotes && <p><strong>Payment:</strong> {offer.paymentNotes}</p>}
       {offer.lineItems?.length > 0 && <table className="line-item-table"><tbody>{offer.lineItems.map((item, index) => <tr key={index}><td>{typeLabel(item.type)}</td><td>{item.description}</td><td>{item.quantity} x {formatMinor(item.unitPriceMinor, offer.currency)}</td><td>{formatMinor(item.lineTotalMinor, offer.currency)}</td></tr>)}</tbody></table>}
-      {!terms.length && !offer.cancellationPolicy && !offer.paymentNotes && !offer.lineItems?.length && <p>No additional terms were provided.</p>}
+      {offer.options?.length > 0 && <p>Line items and prices above are for the main option{offer.optionLabel ? ` (${offer.optionLabel})` : ''}. Alternative options share these terms.</p>}
+      {offer.attachments?.length > 0 && <AttachmentList attachments={offer.attachments} />}
+      {!terms.length && !offer.cancellationPolicy && !offer.paymentNotes && !offer.lineItems?.length && !offer.attachments?.length && <p>No additional terms were provided.</p>}
     </details>
+  );
+}
+
+export function AttachmentList({ attachments, onRemove }) {
+  const { data: reference } = useReferenceData();
+  const [error, setError] = useState('');
+
+  async function open(attachment) {
+    setError('');
+    try {
+      const { url } = await createAttachmentDownloadUrl(attachment.id);
+      window.open(url, '_blank', 'noopener,noreferrer');
+    } catch (requestError) {
+      setError(requestError.message);
+    }
+  }
+
+  return (
+    <>
+      <ul className="attachment-list">{attachments.map((attachment) => <li key={attachment.id}>
+        <span><Paperclip size={13} />{attachment.filename}</span>
+        {attachment.scanStatus === 'clean'
+          ? <button type="button" className="text-button" onClick={() => open(attachment)}><Download size={13} />Open</button>
+          : <small>{labelFor(reference?.documentScanStatuses, attachment.scanStatus)}</small>}
+        {onRemove && <button type="button" className="icon-button" aria-label={`Remove ${attachment.filename}`} onClick={() => onRemove(attachment)}><Trash2 size={14} /></button>}
+      </li>)}</ul>
+      {error && <p className="auth-error" role="alert">{error}</p>}
+    </>
   );
 }

@@ -4,7 +4,7 @@ import { formatMinor, fromMinorUnits, toMinorUnits } from './money.js';
 import { labelFor, useReferenceData } from './referenceData.js';
 import { useCan } from './capabilities.js';
 import { DestinationPicker } from './DestinationPicker.jsx';
-import { SellerDocuments } from './SellerDocuments.jsx';
+import { VerificationDocuments } from './SellerDocuments.jsx';
 
 export function DmcOverview({ requests, offers, sellerProfile, loading, onOpenRequests, onOpenOffers, onRespond }) {
   const verified = sellerProfile?.verificationStatus === 'approved';
@@ -25,12 +25,12 @@ export function DmcOverview({ requests, offers, sellerProfile, loading, onOpenRe
   );
 }
 
-export function DmcRequestWorkspace({ requests, sellerProfile, loading, onRespond, onMessage, onReport }) {
+export function DmcRequestWorkspace({ requests, sellerProfile, loading, onRespond, onMessage, onReport, onReconfirm, onRevise, onAnswerNegotiation }) {
   const verified = sellerProfile?.verificationStatus === 'approved';
   return (
     <section className="surface-section full-section role-inbox">
       <div className="section-heading request-list-heading"><div><p className="eyebrow">MATCHED TO YOUR COVERAGE</p><h2>Destination requests <span className="heading-count">{requests.length}</span></h2></div><span className={`status-pill ${verified ? 'open' : ''}`}><i />{verified ? 'Seller verified' : 'Verification pending'}</span></div>
-      {loading ? <div className="empty-state">Loading matched requests...</div> : requests.length ? <SellerRequestList requests={requests} onRespond={onRespond} onMessage={onMessage} onReport={onReport} role="dmc" sellerProfile={sellerProfile} /> : <div className="empty-state"><MapPin size={22} /><strong>No matched requests</strong><span>Only requests targeted to your organization appear here.</span></div>}
+      {loading ? <div className="empty-state">Loading matched requests...</div> : requests.length ? <SellerRequestList requests={requests} onRespond={onRespond} onMessage={onMessage} onReport={onReport} onReconfirm={onReconfirm} onRevise={onRevise} onAnswerNegotiation={onAnswerNegotiation} role="dmc" sellerProfile={sellerProfile} /> : <div className="empty-state"><MapPin size={22} /><strong>No matched requests</strong><span>Only requests targeted to your organization appear here.</span></div>}
       <p className="privacy-note"><BadgeCheck size={15} />Only your own offers and rank are visible. Client contact details are not shared.</p>
     </section>
   );
@@ -41,7 +41,7 @@ export function DmcOffers({ offers, loading }) {
     <section className="surface-section full-section role-inbox">
       <div className="section-heading request-list-heading"><div><p className="eyebrow">YOUR SUBMISSIONS</p><h2>My offers <span className="heading-count">{offers.length}</span></h2></div><span className="match-filter"><Clock3 size={14} />Your organization only</span></div>
       {loading ? <div className="empty-state">Loading your offers...</div> : offers.length ? <div className="role-table-wrap"><table className="role-table"><thead><tr><th>REQUEST</th><th>DESTINATION</th><th>YOUR PRICE</th><th>STATUS</th><th>RANK</th></tr></thead><tbody>
-        {offers.map((offer) => <tr key={offer.id}><td><strong>{offer.requestCode}</strong><small>{new Date(offer.createdAt).toLocaleDateString()}</small></td><td>{offer.destination}</td><td><strong>{formatMinor(offer.totalMinor, offer.currency)}</strong><small>Valid through {new Date(offer.validityUntil).toLocaleDateString()}</small></td><td><span className={`status-pill ${offer.status === 'accepted' ? 'awarded' : 'open'}`}><i />{offer.status}</span>{offer.outcomeReason && <small className="outcome-reason">Reason: {offer.outcomeReason}</small>}</td><td><span className="rank-value">{offer.rank} <small>of {offer.eligibleCount}</small></span></td></tr>)}
+        {offers.map((offer) => <tr key={offer.id}><td><strong>{offer.requestCode}</strong><small>{new Date(offer.createdAt).toLocaleDateString()}</small></td><td>{offer.destination}</td><td><strong>{formatMinor(offer.totalMinor, offer.currency)}</strong><small>Valid through {new Date(offer.validityUntil).toLocaleDateString()}</small></td><td><span className={`status-pill ${offer.status === 'accepted' ? 'awarded' : 'open'}`}><i />{offer.status}</span>{offer.needsReconfirmation && <span className="status-pill draft"><i />Re-confirm needed</span>}{offer.outcomeReason && <small className="outcome-reason">Reason: {offer.outcomeReason}</small>}</td><td><span className="rank-value">{offer.rank} <small>of {offer.eligibleCount}</small></span></td></tr>)}
       </tbody></table></div> : <div className="empty-state"><MessageSquareText size={22} /><strong>No offers submitted</strong><span>Offers you submit to matched requests appear here.</span></div>}
       <p className="privacy-note"><UsersRound size={15} />Rank shows your position and eligible-offer count only. Competitor prices are never shown.</p>
     </section>
@@ -67,12 +67,12 @@ export function HotelOverview({ requests, offers, sellerProfile, loading, onOpen
   );
 }
 
-export function HotelRequestWorkspace({ requests, sellerProfile, loading, onRespond, onMessage, onReport }) {
+export function HotelRequestWorkspace({ requests, sellerProfile, loading, onRespond, onMessage, onReport, onReconfirm, onRevise, onAnswerNegotiation }) {
   const verified = sellerProfile?.verificationStatus === 'approved';
   return (
     <section className="surface-section full-section role-inbox">
       <div className="section-heading request-list-heading"><div><p className="eyebrow">ROOMS AND AVAILABILITY</p><h2>Booking requests <span className="heading-count">{requests.length}</span></h2></div><span className="match-filter"><MapPin size={14} />{sellerProfile?.propertyCity ?? 'Property city pending'}</span></div>
-      {loading ? <div className="empty-state">Loading room requests...</div> : requests.length ? <HotelRequestList requests={requests} onRespond={onRespond} onMessage={onMessage} onReport={onReport} sellerProfile={sellerProfile} /> : <div className="empty-state"><BedDouble size={22} /><strong>No matched room requests</strong><span>Only requests for hotel services in your property city will appear here.</span></div>}
+      {loading ? <div className="empty-state">Loading room requests...</div> : requests.length ? <HotelRequestList requests={requests} onRespond={onRespond} onMessage={onMessage} onReport={onReport} onReconfirm={onReconfirm} onRevise={onRevise} onAnswerNegotiation={onAnswerNegotiation} sellerProfile={sellerProfile} /> : <div className="empty-state"><BedDouble size={22} /><strong>No matched room requests</strong><span>Only requests for hotel services in your property city will appear here.</span></div>}
       <p className="privacy-note"><BadgeCheck size={15} />Guest names and direct contact details remain private to the travel agency. {verified ? 'Verified hotel can submit a room quote.' : 'Verification is required before quoting.'}</p>
     </section>
   );
@@ -167,7 +167,7 @@ export function RoleProfile({ role, profile, organization, onSave, onDocumentsCh
         <button className="primary-button" type="submit" disabled={saving || !profile || !canManageProfile || (isDmc ? !coverage.length : !propertyCity.length)} title={canManageProfile ? undefined : 'Only owners and managers can change the company profile.'}>{saving ? 'Saving...' : 'Save profile'}</button>
       </form>
       <p className="privacy-note"><BadgeCheck size={15} />Changing your seller profile withdraws active offers and requires a new manual verification review.</p>
-      <SellerDocuments onUploaded={onDocumentsChanged} />
+      <VerificationDocuments onUploaded={onDocumentsChanged} />
     </section>
   );
 }
@@ -179,6 +179,7 @@ function RoleMetric({ label, value, note, icon: Icon }) {
 function sellerActionState(request, canSubmitOffer, canWriteOffers, readyLabel) {
   if (request.status === 'awarded') return { label: 'Awarded', disabled: true };
   if (request.status === 'closed') return { label: 'Under agency review', disabled: true };
+  if (request.needsReconfirmation) return { label: 'Re-confirm needed', disabled: true, title: 'Open the request inbox to re-confirm or revise your offer.' };
   if (request.hasActiveOffer) return { label: 'Offer submitted', disabled: true };
   if (request.offerLimitReached) return { label: 'Offer limit reached', disabled: true, title: `This request already has ${request.offerLimit} offers.` };
   if (!canSubmitOffer) return { label: 'Verification pending', disabled: true, title: 'Complete seller verification before bidding.' };
@@ -186,23 +187,85 @@ function sellerActionState(request, canSubmitOffer, canWriteOffers, readyLabel) 
   return { label: readyLabel, disabled: false };
 }
 
-function SellerRequestList({ requests, onRespond, onMessage, onReport, role, sellerProfile }) {
+function TripChangeNotice({ request }) {
+  if (!request.tripChange) return null;
+  const { previous, changedAt, note } = request.tripChange;
+  return <p className="trip-change-note"><CalendarDays size={13} />Trip details changed {new Date(changedAt).toLocaleDateString()}. Previously {previous.dates} / {previous.travelers}{previous.roomCount ? ` / ${previous.roomCount} rooms` : ''}.{note ? ` Agency note: ${note}` : ''}</p>;
+}
+
+// Revising the offer answers either kind; accepting applies the counter price as-is.
+function NegotiationNotice({ request, onAnswer, onRevise, canWriteOffers }) {
+  const { data: reference } = useReferenceData();
+  const [declining, setDeclining] = useState(false);
+  const [note, setNote] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const negotiation = request.openNegotiation;
+  if (!negotiation || !onAnswer) return null;
+  const counter = negotiation.kind === 'counter_offer';
+  const price = counter ? `${formatMinor(negotiation.counterPriceMinor, negotiation.currency)}${negotiation.offerKind === 'hotel_room' ? ' / room / night' : ''}` : null;
+  const title = canWriteOffers ? undefined : 'Your team role cannot change offers.';
+
+  async function answer(accept) {
+    setBusy(true);
+    setError('');
+    const failure = await onAnswer(negotiation, accept, note.trim());
+    setBusy(false);
+    if (failure) setError(failure);
+  }
+
+  return (
+    <div className="negotiation-notice">
+      <p><strong>{labelFor(reference?.negotiationKinds, negotiation.kind)}</strong>{negotiation.optionLabel ? ` for ${negotiation.optionLabel}` : ''}{price ? `: ${price}` : ''}{negotiation.message ? `. Agency note: ${negotiation.message}` : ''}</p>
+      {declining ? <>
+        <textarea className="form-input" aria-label="Reason for declining" value={note} onChange={(event) => setNote(event.target.value)} maxLength="1000" placeholder="Tell the agency why" />
+        <div className="modal-actions"><button className="secondary-button" disabled={busy} onClick={() => setDeclining(false)}>Back</button><button className="primary-button" disabled={busy || note.trim().length < 5} onClick={() => answer(false)}>Send decline</button></div>
+      </> : <div className="modal-actions">
+        {counter && <button className="primary-button" disabled={busy || !canWriteOffers} title={title} onClick={() => answer(true)}><Check size={14} />Accept counter price</button>}
+        <button className="secondary-button" disabled={!canWriteOffers} title={title} onClick={() => onRevise(request)}>Revise offer</button>
+        <button className="text-button" disabled={!canWriteOffers} title={title} onClick={() => setDeclining(true)}>Decline</button>
+      </div>}
+      {error && <p className="auth-error" role="alert">{error}</p>}
+    </div>
+  );
+}
+
+function ReconfirmActions({ request, onReconfirm, onRevise, canWriteOffers }) {
+  const [busy, setBusy] = useState(false);
+  const title = canWriteOffers ? undefined : 'Your team role cannot change offers.';
+  async function reconfirm() {
+    setBusy(true);
+    await onReconfirm(request);
+    setBusy(false);
+  }
+  return <>
+    <button className="secondary-button" disabled={busy || !canWriteOffers} title={title} onClick={reconfirm}><Check size={14} />{busy ? 'Confirming...' : 'Re-confirm price'}</button>
+    <button className="primary-button" disabled={!canWriteOffers} title={title} onClick={() => onRevise(request)}>Revise offer<ArrowUpRight size={14} /></button>
+  </>;
+}
+
+function SellerRequestAction({ request, action, onRespond, onReconfirm, onRevise, canWriteOffers }) {
+  if (request.needsReconfirmation && request.status === 'open' && onReconfirm && onRevise) return <ReconfirmActions request={request} onReconfirm={onReconfirm} onRevise={onRevise} canWriteOffers={canWriteOffers} />;
+  return <button className="secondary-button" disabled={action.disabled} title={action.title} onClick={() => onRespond(request)}>{action.label}<ArrowUpRight size={14} /></button>;
+}
+
+function SellerRequestList({ requests, onRespond, onMessage, onReport, onReconfirm, onRevise, onAnswerNegotiation, role, sellerProfile }) {
   const { data: reference } = useReferenceData();
   const canWriteOffers = useCan('offer.write');
   const canSubmitOffer = role !== 'dmc' || sellerProfile?.verificationStatus === 'approved';
   return <div className="seller-request-list">{requests.map((request) => { const action = sellerActionState(request, canSubmitOffer, canWriteOffers, 'Prepare offer'); return <article className="seller-request-row" key={request.id}>
-    <div className="seller-request-main"><div className="seller-request-title"><h3>{request.destination}</h3><span className="request-id">{request.requestCode}</span>{request.agencyVerified && <span className="verified-mark" title="Verified agency"><BadgeCheck size={14} /></span>}</div><span className="request-agency"><Building2 size={13} />{request.agencyName}{request.agencyVerified && <BadgeCheck size={13} />}</span><div className="request-detail-line"><span><CalendarDays size={14} />{request.dates}</span><span><UsersRound size={14} />{request.travelers}</span></div><p>{request.services?.map((service) => labelFor(reference?.services, service)).join(', ')}</p></div>
-    <div className="seller-request-side"><span className="request-deadline"><Clock3 size={13} />Respond by {request.deadline}</span><div className="seller-request-actions">{onReport && <button className="text-button report-link" onClick={() => onReport(request)}><Flag size={13} />Report</button>}<button className="secondary-button" onClick={() => onMessage(request)}><MessageSquareText size={14} />Message</button><button className="secondary-button" disabled={action.disabled} title={action.title} onClick={() => onRespond(request)}>{action.label}<ArrowUpRight size={14} /></button></div></div>
+    <div className="seller-request-main"><div className="seller-request-title"><h3>{request.destination}</h3><span className="request-id">{request.requestCode}</span>{request.agencyVerified && <span className="verified-mark" title="Verified agency"><BadgeCheck size={14} /></span>}</div><span className="request-agency"><Building2 size={13} />{request.agencyName}{request.agencyVerified && <BadgeCheck size={13} />}</span><div className="request-detail-line"><span><CalendarDays size={14} />{request.dates}</span><span><UsersRound size={14} />{request.travelers}</span></div><p>{request.services?.map((service) => labelFor(reference?.services, service)).join(', ')}</p><TripChangeNotice request={request} /><NegotiationNotice request={request} onAnswer={onAnswerNegotiation} onRevise={onRevise} canWriteOffers={canWriteOffers} /></div>
+    <div className="seller-request-side"><span className="request-deadline"><Clock3 size={13} />Respond by {request.deadline}</span><div className="seller-request-actions">{onReport && <button className="text-button report-link" onClick={() => onReport(request)}><Flag size={13} />Report</button>}{onMessage && <button className="secondary-button" onClick={() => onMessage(request)}><MessageSquareText size={14} />Message</button>}<SellerRequestAction request={request} action={action} onRespond={onRespond} onReconfirm={onReconfirm} onRevise={onRevise} canWriteOffers={canWriteOffers} /></div></div>
   </article>; })}</div>;
 }
 
 
-function HotelRequestList({ requests, onRespond, onMessage, onReport, sellerProfile }) {
+function HotelRequestList({ requests, onRespond, onMessage, onReport, onReconfirm, onRevise, onAnswerNegotiation, sellerProfile }) {
   const { data: reference } = useReferenceData();
   const canWriteOffers = useCan('offer.write');
   const canSubmitOffer = sellerProfile?.verificationStatus === 'approved';
   return <div className="seller-request-list">{requests.map((request) => { const action = sellerActionState(request, canSubmitOffer, canWriteOffers, 'Quote rooms'); return <article className="seller-request-row" key={request.id}>
-    <div className="seller-request-main"><div className="seller-request-title"><h3>{request.destination}</h3><span className="request-id">{request.requestCode}</span>{request.agencyVerified && <span className="verified-mark" title="Verified agency"><BadgeCheck size={14} /></span>}</div><span className="request-agency"><Building2 size={13} />{request.agencyName}{request.agencyVerified && <BadgeCheck size={13} />}</span><div className="request-detail-line"><span><CalendarDays size={14} />{request.dates}</span><span><BedDouble size={14} />{request.roomCount ?? 1} rooms / {request.nights} nights</span></div><p>{request.mealPlan ? labelFor(reference?.mealPlans, request.mealPlan) : 'Meal plan flexible'} / {request.hotelCategory ? labelFor(reference?.hotelCategories, request.hotelCategory) : 'Any category'}</p></div>
-    <div className="seller-request-side"><span className="request-deadline"><Clock3 size={13} />Respond by {request.deadline}</span><div className="seller-request-actions">{onReport && <button className="text-button report-link" onClick={() => onReport(request)}><Flag size={13} />Report</button>}<button className="secondary-button" onClick={() => onMessage(request)}><MessageSquareText size={14} />Message</button><button className="secondary-button" disabled={action.disabled} title={action.title} onClick={() => onRespond(request)}>{action.label}<ArrowUpRight size={14} /></button></div></div>
+    <div className="seller-request-main"><div className="seller-request-title"><h3>{request.destination}</h3><span className="request-id">{request.requestCode}</span>{request.agencyVerified && <span className="verified-mark" title="Verified agency"><BadgeCheck size={14} /></span>}</div><span className="request-agency"><Building2 size={13} />{request.agencyName}{request.agencyVerified && <BadgeCheck size={13} />}</span><div className="request-detail-line"><span><CalendarDays size={14} />{request.dates}</span><span><BedDouble size={14} />{request.roomCount ?? 1} rooms / {request.nights} nights</span></div><p>{request.mealPlan ? labelFor(reference?.mealPlans, request.mealPlan) : 'Meal plan flexible'} / {request.hotelCategory ? labelFor(reference?.hotelCategories, request.hotelCategory) : 'Any category'}</p><TripChangeNotice request={request} /><NegotiationNotice request={request} onAnswer={onAnswerNegotiation} onRevise={onRevise} canWriteOffers={canWriteOffers} /></div>
+    <div className="seller-request-side"><span className="request-deadline"><Clock3 size={13} />Respond by {request.deadline}</span><div className="seller-request-actions">{onReport && <button className="text-button report-link" onClick={() => onReport(request)}><Flag size={13} />Report</button>}{onMessage && <button className="secondary-button" onClick={() => onMessage(request)}><MessageSquareText size={14} />Message</button>}<SellerRequestAction request={request} action={action} onRespond={onRespond} onReconfirm={onReconfirm} onRevise={onRevise} canWriteOffers={canWriteOffers} /></div></div>
   </article>; })}</div>;
 }

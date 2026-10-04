@@ -20,6 +20,7 @@ import {
   LogOut,
   MapPin,
   MessageSquareText,
+  Paperclip,
   Plus,
   Search,
   ShieldCheck,
@@ -33,7 +34,7 @@ import AuthPage from './AuthPage.jsx';
 import AuthActionPage from './AuthActionPage.jsx';
 import AcceptInvitePage from './AcceptInvitePage.jsx';
 import { TeamPanel } from './TeamPanel.jsx';
-import { OfferDetails, OfferFormModal } from './OfferForm.jsx';
+import { AttachmentList, OfferDetails, OfferFormModal } from './OfferForm.jsx';
 import { ReportDialog } from './ReportDialog.jsx';
 import { CapabilitiesContext, useCan } from './capabilities.js';
 import { formatMinor, toMinorUnits } from './money.js';
@@ -44,9 +45,14 @@ import { AccountPanel, DeletionPendingPage } from './AccountPanel.jsx';
 import { DestinationPicker } from './DestinationPicker.jsx';
 import { BookingsWorkspace } from './Bookings.jsx';
 import { IntegrationsPanel } from './Integrations.jsx';
+import { VerificationDocuments } from './SellerDocuments.jsx';
 import {
+  acceptOfferNegotiation,
   awardMarketplaceOffer,
+  changeRequestTrip,
   createMarketplaceRequest,
+  createOfferNegotiation,
+  declineOfferNegotiation,
   getCurrentSession,
   getRequestMessages,
   listHotelInventory,
@@ -60,11 +66,17 @@ import {
   markNotificationRead,
   logoutAccount,
   publishMarketplaceRequest,
+  reconfirmMarketplaceOffer,
+  reviseMarketplaceOffer,
   submitDmcOffer,
   submitHotelOffer,
   updateSellerProfile,
   saveHotelInventory,
   sendRequestMessage,
+  sendMessageAttachment,
+  undoMarketplaceAward,
+  uploadOfferAttachment,
+  withdrawOfferNegotiation,
 } from './api.js';
 import {
   DmcOffers,
@@ -162,6 +174,7 @@ function Workspace({ role, account }) {
       { label: 'Offers', icon: MessageSquareText },
       { label: 'Bookings', icon: ClipboardCheck },
       { label: 'Suppliers', icon: UsersRound },
+      { label: 'Verification', icon: BadgeCheck },
       { label: 'Team', icon: UserCog },
       { label: 'Integrations', icon: Webhook, capability: 'integration.manage' },
       { label: 'Security', icon: ShieldCheck },
@@ -206,6 +219,7 @@ function Workspace({ role, account }) {
   const [apiState, setApiState] = useState('checking');
   const [responseTarget, setResponseTarget] = useState(null);
   const [comparison, setComparison] = useState(null);
+  const [tripChangeTarget, setTripChangeTarget] = useState(null);
   const [messageThread, setMessageThread] = useState(null);
   const [reportTarget, setReportTarget] = useState(null);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
@@ -331,13 +345,92 @@ function Workspace({ role, account }) {
     }
   }
 
-  async function saveSellerOffer(payload) {
+  async function saveSellerOffer(payload, files = []) {
     if (!responseTarget) return null;
+    const tripPayload = { ...payload, trip_version: responseTarget.tripVersion };
+    let saved;
     try {
-      await (role === 'dmc' ? submitDmcOffer : submitHotelOffer)(responseTarget.id, payload);
-      setResponseTarget(null);
+      saved = responseTarget.reviseOfferId
+        ? await reviseMarketplaceOffer(responseTarget.reviseOfferId, tripPayload)
+        : await (role === 'dmc' ? submitDmcOffer : submitHotelOffer)(responseTarget.id, tripPayload);
+    } catch (error) {
+      return error.message;
+    }
+    const failedFiles = [];
+    for (const file of files) {
+      try {
+        await uploadOfferAttachment(saved.offer.id, file);
+      } catch (error) {
+        failedFiles.push(`${file.name}: ${error.message}`);
+      }
+    }
+    setResponseTarget(null);
+    await syncMarketplace();
+    if (failedFiles.length) setMarketplaceError(`The offer was saved, but some files were not attached. ${failedFiles.join(' ')}`);
+    setToast(responseTarget.reviseOfferId ? 'Revised offer sent to the agency.' : role === 'hotelier' ? 'Room quote submitted to the requesting agency.' : 'Offer submitted to the requesting agency.');
+    return null;
+  }
+
+  async function reconfirmOffer(request) {
+    try {
+      await reconfirmMarketplaceOffer(request.myOfferId, request.tripVersion);
       await syncMarketplace();
-      setToast(role === 'hotelier' ? 'Room quote submitted to the requesting agency.' : 'Offer submitted to the requesting agency.');
+      setToast('Offer re-confirmed for the updated trip.');
+    } catch (error) {
+      setMarketplaceError(error.message);
+    }
+  }
+
+  async function saveTripChange(trip) {
+    try {
+      const result = await changeRequestTrip(tripChangeTarget.id, { ...trip, trip_version: tripChangeTarget.tripVersion });
+      setTripChangeTarget(null);
+      await syncMarketplace();
+      if (comparison?.request.id === result.request.id) {
+        const refreshed = await listRequestOffers(result.request.id);
+        setComparison({ request: { ...comparison.request, ...result.request }, offers: refreshed.offers });
+      }
+      setToast(result.offersAwaitingReconfirmation
+        ? `Trip updated. ${result.offersAwaitingReconfirmation} seller offer(s) must be re-confirmed before you can award them.`
+        : 'Trip updated and matched sellers notified.');
+      return null;
+    } catch (error) {
+      return error.message;
+    }
+  }
+
+  async function refreshComparison(requestId) {
+    const refreshed = await listRequestOffers(requestId);
+    setComparison((current) => current?.request.id === requestId ? { ...current, offers: refreshed.offers } : current);
+  }
+
+  async function sendNegotiation(offer, payload) {
+    try {
+      await createOfferNegotiation(offer.id, payload);
+      await refreshComparison(offer.requestId);
+      setToast(payload.kind === 'counter_offer' ? `Counter-offer sent to ${offer.sellerName}.` : `Revision request sent to ${offer.sellerName}.`);
+      return null;
+    } catch (error) {
+      return error.message;
+    }
+  }
+
+  async function withdrawNegotiation(offer) {
+    try {
+      await withdrawOfferNegotiation(offer.openNegotiation.id);
+      await refreshComparison(offer.requestId);
+      setToast('Request withdrawn. The seller can no longer answer it.');
+    } catch (error) {
+      setMarketplaceError(error.message);
+    }
+  }
+
+  async function answerNegotiation(negotiation, accept, note) {
+    try {
+      if (accept) await acceptOfferNegotiation(negotiation.id);
+      else await declineOfferNegotiation(negotiation.id, note);
+      await syncMarketplace();
+      setToast(accept ? 'Counter price accepted. The agency has been notified.' : 'Decline sent to the agency.');
       return null;
     } catch (error) {
       return error.message;
@@ -458,17 +551,18 @@ function Workspace({ role, account }) {
           )}
           {role === 'agency' && activePage === 'Offers' && <OfferWorkspace offers={offers} onCompare={(offer) => openComparison(requests.find((item) => item.id === offer.requestId))} />}
           {role === 'agency' && activePage === 'Suppliers' && <SupplierWorkspace />}
+          {role === 'agency' && activePage === 'Verification' && <section className="surface-section full-section"><div className="section-heading request-list-heading"><div><p className="eyebrow">AGENCY VERIFICATION</p><h2>{details.organization}</h2></div></div><p className="modal-copy">Verified agencies show a badge on every request, so sellers know the buyer is a real business.</p><VerificationDocuments submittable /></section>}
           {activePage === 'Security' && <MfaSecurityPanel account={account} />}
           {activePage === 'Security' && <AccountPanel account={account} onDeleted={(result) => navigate('/login', { replace: true, state: { notice: `Account deletion scheduled for ${new Date(result.scheduledFor).toLocaleDateString()}. Sign in before then to cancel.` } })} />}
           {activePage === 'Team' && <TeamPanel account={account} />}
           {activePage === 'Integrations' && <IntegrationsPanel />}
           {activePage === 'Bookings' && <BookingsWorkspace />}
           {role === 'dmc' && activePage === 'Overview' && <DmcOverview requests={requests} offers={offers} sellerProfile={sellerProfile} loading={dataLoading} onOpenRequests={() => setActivePage('Matching requests')} onOpenOffers={() => setActivePage('My offers')} onRespond={setResponseTarget} />}
-          {role === 'dmc' && activePage === 'Matching requests' && <DmcRequestWorkspace requests={requests} sellerProfile={sellerProfile} loading={dataLoading} onRespond={setResponseTarget} onReport={(request) => setReportTarget({ type: 'request', id: request.id, label: `request ${request.requestCode}` })} onMessage={(request) => setMessageThread({ requestId: request.id, requestCode: request.requestCode, peerName: request.agencyName })} />}
+          {role === 'dmc' && activePage === 'Matching requests' && <DmcRequestWorkspace requests={requests} sellerProfile={sellerProfile} loading={dataLoading} onRespond={setResponseTarget} onReconfirm={reconfirmOffer} onAnswerNegotiation={answerNegotiation} onRevise={(request) => setResponseTarget({ ...request, reviseOfferId: request.myOfferId })} onReport={(request) => setReportTarget({ type: 'request', id: request.id, label: `request ${request.requestCode}` })} onMessage={(request) => setMessageThread({ requestId: request.id, requestCode: request.requestCode, peerName: request.agencyName })} />}
           {role === 'dmc' && activePage === 'My offers' && <DmcOffers offers={offers} loading={dataLoading} />}
           {role === 'dmc' && activePage === 'Company profile' && <RoleProfile role="dmc" profile={sellerProfile} organization={details.organization} onSave={saveSellerProfile} onDocumentsChanged={syncMarketplace} />}
           {role === 'hotelier' && activePage === 'Overview' && <HotelOverview requests={requests} offers={offers} sellerProfile={sellerProfile} loading={dataLoading} onOpenRequests={() => setActivePage('Booking requests')} onOpenAvailability={() => setActivePage('Availability')} onRespond={setResponseTarget} />}
-          {role === 'hotelier' && activePage === 'Booking requests' && <HotelRequestWorkspace requests={requests} sellerProfile={sellerProfile} loading={dataLoading} onRespond={setResponseTarget} onReport={(request) => setReportTarget({ type: 'request', id: request.id, label: `request ${request.requestCode}` })} onMessage={(request) => setMessageThread({ requestId: request.id, requestCode: request.requestCode, peerName: request.agencyName })} />}
+          {role === 'hotelier' && activePage === 'Booking requests' && <HotelRequestWorkspace requests={requests} sellerProfile={sellerProfile} loading={dataLoading} onRespond={setResponseTarget} onReconfirm={reconfirmOffer} onAnswerNegotiation={answerNegotiation} onRevise={(request) => setResponseTarget({ ...request, reviseOfferId: request.myOfferId })} onReport={(request) => setReportTarget({ type: 'request', id: request.id, label: `request ${request.requestCode}` })} onMessage={(request) => setMessageThread({ requestId: request.id, requestCode: request.requestCode, peerName: request.agencyName })} />}
           {role === 'hotelier' && activePage === 'Properties' && <RoleProfile role="hotelier" profile={sellerProfile} organization={details.organization} onSave={saveSellerProfile} onDocumentsChanged={syncMarketplace} />}
           {role === 'hotelier' && activePage === 'Availability' && <HotelAvailability inventory={inventory} loading={dataLoading} onSave={saveInventory} />}
 
@@ -479,16 +573,26 @@ function Workspace({ role, account }) {
       {createOpen && <CreateRequestModal draft={draftToPublish} onClose={() => { setCreateOpen(false); setDraftToPublish(null); }} onCreate={saveRequestDraft} onPublish={publishDraft} />}
 
       {responseTarget && <OfferFormModal role={role} target={responseTarget} roomTypes={[...new Set(inventory.map((item) => item.roomType))]} onClose={() => setResponseTarget(null)} onSubmit={saveSellerOffer} />}
-      {comparison && <OfferComparison request={comparison.request} offers={comparison.offers} onReport={(offer) => setReportTarget({ type: 'offer', id: offer.id, label: `offer from ${offer.sellerName}` })} onMessage={(offer) => setMessageThread({ requestId: comparison.request.id, requestCode: comparison.request.requestCode, sellerOrganizationId: offer.sellerOrganizationId, peerName: offer.sellerName })} onAward={async (offerId, notSelectedReason) => {
+      {comparison && <OfferComparison request={comparison.request} offers={comparison.offers} onNegotiate={sendNegotiation} onWithdrawNegotiation={withdrawNegotiation} onChangeTrip={() => setTripChangeTarget(comparison.request)} onReport={(offer) => setReportTarget({ type: 'offer', id: offer.id, label: `offer from ${offer.sellerName}` })} onMessage={(offer) => setMessageThread({ requestId: comparison.request.id, requestCode: comparison.request.requestCode, sellerOrganizationId: offer.sellerOrganizationId, peerName: offer.sellerName })} onAward={async (selections, notSelectedReason) => {
         try {
-          await awardMarketplaceOffer(comparison.request.id, offerId, notSelectedReason);
+          await awardMarketplaceOffer(comparison.request.id, selections, notSelectedReason);
           setComparison(null);
           await syncMarketplace();
-          setToast('Offer awarded. Confirm the booking under Bookings to share guest details with the seller.');
+          setToast(`${selections.length > 1 ? `Awarded to ${selections.length} sellers.` : 'Offer awarded.'} You can undo it for ${reference?.limits.awardUndoWindowMinutes} minutes from the request. Confirm the booking under Bookings to share guest details.`);
+        } catch (error) {
+          setMarketplaceError(error.message);
+        }
+      }} onUndoAward={async (reason) => {
+        try {
+          const result = await undoMarketplaceAward(comparison.request.id, reason);
+          setComparison(null);
+          await syncMarketplace();
+          setToast(`Award undone. ${result.restoredOffers} offer(s) are active again and the request is ${result.status}.`);
         } catch (error) {
           setMarketplaceError(error.message);
         }
       }} onClose={() => setComparison(null)} />}
+      {tripChangeTarget && <TripChangeModal request={tripChangeTarget} onClose={() => setTripChangeTarget(null)} onSave={saveTripChange} />}
       {messageThread && <MessageThreadModal {...messageThread} onReport={(message) => setReportTarget({ type: 'message', id: message.id, label: `message from ${message.senderName}` })} onClose={() => setMessageThread(null)} />}
       {reportTarget && <ReportDialog target={reportTarget} onClose={() => setReportTarget(null)} onReported={() => setToast('Report sent to platform operations.')} />}
       {notificationsOpen && <NotificationPopover notifications={notifications} unreadCount={unreadCount} loading={notificationsLoading} onClose={() => setNotificationsOpen(false)} onRead={readNotification} onReadAll={readAllNotifications} />}
@@ -648,41 +752,154 @@ function CreateRequestModal({ draft, onClose, onCreate, onPublish }) {
   );
 }
 
-function OfferComparison({ request, offers, onAward, onMessage, onReport, onClose }) {
+function OfferComparison({ request, offers, onAward, onUndoAward, onNegotiate, onWithdrawNegotiation, onChangeTrip, onMessage, onReport, onClose }) {
   const { data: reference } = useReferenceData();
-  const [awardTarget, setAwardTarget] = useState(null);
+  const [awardSelections, setAwardSelections] = useState([]);
+  const [negotiationTarget, setNegotiationTarget] = useState(null);
   const [notSelectedReason, setNotSelectedReason] = useState('');
   const [awarding, setAwarding] = useState(false);
   const canAwardRole = useCan('request.award');
   const canAward = ['open', 'closed'].includes(request.status) && canAwardRole;
+  const canChangeTrip = useCan('request.write') && request.status === 'open';
   const canMessage = useCan('message.write');
+  const canNegotiate = useCan('request.write') && ['open', 'closed'].includes(request.status);
+  const awaitingCount = offers.filter((offer) => offer.needsReconfirmation).length;
+  const awardTarget = awardSelections.length > 0;
+  const canUndo = canAwardRole && request.status === 'awarded' && request.awardUndoUntil && new Date(request.awardUndoUntil) > new Date();
 
   async function confirmAward() {
     setAwarding(true);
-    await onAward(awardTarget.id, notSelectedReason);
+    await onAward(awardSelections.map(({ offer, option }) => ({ offerId: offer.id, optionId: option?.id ?? null })), notSelectedReason);
     setAwarding(false);
+  }
+
+  async function undoAward() {
+    setAwarding(true);
+    await onUndoAward(notSelectedReason);
+    setAwarding(false);
+  }
+
+  const awardable = (offer) => canAward && ['submitted', 'shortlisted'].includes(offer.status);
+  const startAward = (offer, option) => setAwardSelections([{ offer, option }]);
+  const selectedOfferIds = new Set(awardSelections.map(({ offer }) => offer.id));
+  const splitCandidates = offers.filter((offer) => awardable(offer) && !offer.needsReconfirmation && !selectedOfferIds.has(offer.id));
+  const canSplit = reference && awardSelections.length < reference.limits.maxAwardsPerRequest && splitCandidates.length > 0;
+
+  function addSplitSelection(value) {
+    const [offerId, optionId] = value.split(':');
+    const offer = offers.find((item) => item.id === offerId);
+    if (offer) setAwardSelections((current) => [...current, { offer, option: offer.options?.find((item) => item.id === optionId) ?? null }]);
   }
 
   return (
     <div className="modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
       <section className="modal comparison-modal" role="dialog" aria-modal="true" aria-labelledby="comparison-title">
         <div className="modal-heading"><div><p className="eyebrow">AGENCY COMPARISON</p><h2 id="comparison-title">{request.destination} offers</h2></div><button className="icon-button" aria-label="Close comparison" onClick={onClose}><X size={18} /></button></div>
+        <div className="trip-summary"><span><CalendarDays size={14} />{request.dates} / {request.nights} nights</span><span><UsersRound size={14} />{request.travelers}{request.roomCount ? ` / ${request.roomCount} rooms` : ''}</span>{request.tripChangedAt && <span className="status-pill draft"><i />Changed {new Date(request.tripChangedAt).toLocaleDateString()}</span>}{canChangeTrip && !awardTarget && <button className="secondary-button" onClick={onChangeTrip}>Change trip details</button>}</div>
+        {awaitingCount > 0 && !awardTarget && <p className="trip-change-note">{awaitingCount} offer(s) were priced for earlier trip details. They can be awarded once the seller re-confirms or revises them.</p>}
+        {canUndo && <div className="negotiation-notice">
+          <p>Awarded {new Date(request.awardedAt).toLocaleTimeString()}. You can undo this decision until {new Date(request.awardUndoUntil).toLocaleTimeString()}, as long as no booking has been confirmed. Every offer becomes active again and sellers are told.</p>
+          <input className="form-input" aria-label="Reason for undoing the award" value={notSelectedReason} onChange={(event) => setNotSelectedReason(event.target.value)} maxLength="300" placeholder="Optional reason shared with the sellers" />
+          <div className="modal-actions"><button type="button" className="secondary-button" onClick={undoAward} disabled={awarding}>{awarding ? 'Undoing...' : 'Undo award'}</button></div>
+        </div>}
         {awardTarget ? (
           <div className="award-confirm">
-            <p className="modal-copy">Award <strong>{awardTarget.sellerName}</strong> at <strong>{formatOfferPrice(awardTarget)}</strong>? Every other active offer will be marked not selected.</p>
+            <p className="modal-copy">Award {awardSelections.length > 1 ? 'parts of this trip to:' : 'this offer:'}</p>
+            <ul className="attachment-list">{awardSelections.map(({ offer, option }, index) => <li key={offer.id}>
+              <span><strong>{offer.sellerName}</strong>{(option?.label ?? offer.optionLabel) ? ` (${option?.label ?? offer.optionLabel})` : ''}</span>
+              <span>{formatOfferPrice(option ? { ...offer, ...option } : offer)}</span>
+              {index > 0 && <button type="button" className="icon-button" aria-label={`Remove ${offer.sellerName}`} onClick={() => setAwardSelections((current) => current.filter((_, itemIndex) => itemIndex !== index))}><X size={14} /></button>}
+            </li>)}</ul>
+            {canSplit && <label className="field-label">Split the trip: also award part of it to<select className="form-select" value="" onChange={(event) => addSplitSelection(event.target.value)}><option value="">Choose another seller's offer</option>{splitCandidates.flatMap((offer) => [
+              <option key={offer.id} value={`${offer.id}:`}>{offer.sellerName}{offer.optionLabel ? ` - ${offer.optionLabel}` : ''} / {formatOfferPrice(offer)}</option>,
+              ...(offer.options ?? []).map((option) => <option key={option.id} value={`${offer.id}:${option.id}`}>{offer.sellerName} - {option.label} / {formatOfferPrice({ ...offer, ...option })}</option>),
+            ])}</select></label>}
+            <p className="modal-copy">Every other active offer will be marked not selected. You can undo this for {reference?.limits.awardUndoWindowMinutes} minutes, until a booking is confirmed.</p>
             <label className="field-label" htmlFor="not-selected-reason">Optional reason shared with sellers who were not selected</label>
             <textarea id="not-selected-reason" className="form-input" value={notSelectedReason} onChange={(event) => setNotSelectedReason(event.target.value)} maxLength="300" placeholder="For example: client chose a higher hotel category" />
             <small className="table-secondary">Do not include contact details or links. {300 - notSelectedReason.length} characters left.</small>
-            <div className="modal-actions"><button type="button" className="secondary-button" onClick={() => setAwardTarget(null)} disabled={awarding}>Back</button><button type="button" className="primary-button" onClick={confirmAward} disabled={awarding}>{awarding ? 'Awarding...' : 'Confirm award'}</button></div>
+            <div className="modal-actions"><button type="button" className="secondary-button" onClick={() => setAwardSelections([])} disabled={awarding}>Back</button><button type="button" className="primary-button" onClick={confirmAward} disabled={awarding}>{awarding ? 'Awarding...' : awardSelections.length > 1 ? `Confirm award to ${awardSelections.length} sellers` : 'Confirm award'}</button></div>
           </div>
-        ) : offers.length ? <div className="comparison-list">{offers.map((offer) => <article className="comparison-offer" key={offer.id}><div><strong>{offer.sellerName}</strong><small>{offer.kind === 'hotel_room' ? `${offer.roomType} / ${offer.roomCount ?? 1} room(s)` : 'Land package'} · valid through {new Date(offer.validityUntil).toLocaleDateString()}</small><span>{offer.inclusions.map((item) => labelFor(reference?.offerInclusions, item)).join(', ')}</span><OfferDetails offer={offer} /></div><div className="comparison-price-block"><strong className="comparison-price">{formatOfferPrice(offer)}</strong>{offer.kind === 'hotel_room' && offer.estimatedTotalMinor != null && <small>Est. stay {formatMinor(offer.estimatedTotalMinor, offer.currency)}</small>}{offer.perTravellerMinor != null && <small>{formatMinor(offer.perTravellerMinor, offer.currency)} per traveller ({offer.travellers})</small>}</div><div className="comparison-actions">{canMessage && <button className="secondary-button" onClick={() => onMessage(offer)}><MessageSquareText size={14} />Message</button>}{canAward && ['submitted', 'shortlisted'].includes(offer.status) && <button className="primary-button" onClick={() => setAwardTarget(offer)}>Award offer</button>}<button className="text-button report-link" onClick={() => onReport(offer)}><Flag size={13} />Report</button></div></article>)}</div> : <div className="empty-state"><MessageSquareText size={22} /><strong>No verified offers yet</strong><span>Offers from verified sellers will appear here.</span></div>}
+        ) : negotiationTarget ? (
+          <NegotiationForm offer={negotiationTarget} onCancel={() => setNegotiationTarget(null)} onSubmit={async (payload) => {
+            const failure = await onNegotiate(negotiationTarget, payload);
+            if (!failure) setNegotiationTarget(null);
+            return failure;
+          }} />
+        ) : offers.length ? <div className="comparison-list">{offers.map((offer) => <article className="comparison-offer" key={offer.id}><div><strong>{offer.sellerName}</strong><small>{offer.kind === 'hotel_room' ? `${offer.roomType} / ${offer.roomCount ?? 1} room(s)` : 'Land package'} · valid through {new Date(offer.validityUntil).toLocaleDateString()}</small><span>{offer.inclusions.map((item) => labelFor(reference?.offerInclusions, item)).join(', ')}</span><OfferDetails offer={offer} /><OfferOptionList offer={offer} reference={reference} canAward={awardable(offer)} onAward={(option) => startAward(offer, option)} />{offer.openNegotiation && <span className="status-pill draft"><i />{labelFor(reference?.negotiationKinds, offer.openNegotiation.kind)} sent{offer.openNegotiation.counterPriceMinor != null ? `: ${formatMinor(offer.openNegotiation.counterPriceMinor, offer.currency)}` : ''}{offer.openNegotiation.optionLabel ? ` (${offer.openNegotiation.optionLabel})` : ''}, waiting for the seller</span>}</div><div className="comparison-price-block">{offer.optionLabel && <small>{offer.optionLabel}</small>}<strong className="comparison-price">{formatOfferPrice(offer)}</strong>{offer.kind === 'hotel_room' && offer.estimatedTotalMinor != null && <small>Est. stay {formatMinor(offer.estimatedTotalMinor, offer.currency)}</small>}{offer.perTravellerMinor != null && <small>{formatMinor(offer.perTravellerMinor, offer.currency)} per traveller ({offer.travellers})</small>}</div><div className="comparison-actions">{offer.needsReconfirmation && <span className="status-pill draft" title="The seller has not yet confirmed this price for the updated trip."><i />Awaiting re-confirmation</span>}{canMessage && <button className="secondary-button" onClick={() => onMessage(offer)}><MessageSquareText size={14} />Message</button>}{canNegotiate && ['submitted', 'shortlisted'].includes(offer.status) && (offer.openNegotiation
+          ? <button className="secondary-button" onClick={() => onWithdrawNegotiation(offer)}>Withdraw request</button>
+          : <button className="secondary-button" onClick={() => setNegotiationTarget(offer)}>Negotiate</button>)}{awardable(offer) && <button className="primary-button" disabled={offer.needsReconfirmation} onClick={() => startAward(offer, null)}>{offer.options?.length ? 'Award main option' : 'Award offer'}</button>}<button className="text-button report-link" onClick={() => onReport(offer)}><Flag size={13} />Report</button></div></article>)}</div> : <div className="empty-state"><MessageSquareText size={22} /><strong>No verified offers yet</strong><span>Offers from verified sellers will appear here.</span></div>}
         <p className="privacy-note">Awarding does not confirm a booking or release guest details.</p>
       </section>
     </div>
   );
 }
 
+function TripChangeModal({ request, onClose, onSave }) {
+  const { data: reference } = useReferenceData();
+  const [dateMode, setDateMode] = useState(request.travelMonth ? 'month' : 'exact');
+  const [error, setError] = useState('');
+  const [saving, setSaving] = useState(false);
+  const now = new Date();
+  const deadlineLimits = reference?.limits.requestDeadline;
+  const deadlineInputFormat = "yyyy-MM-dd'T'HH:mm";
+  const currentDeadline = new Date(request.responseDeadline);
+  const earliestDeadline = deadlineLimits ? new Date(Math.max(currentDeadline.getTime(), addHours(now, deadlineLimits.minHours).getTime())) : currentDeadline;
+  const needsExtension = deadlineLimits && currentDeadline < addHours(now, deadlineLimits.minHours);
+
+  async function submit(event) {
+    event.preventDefault();
+    setError('');
+    const form = new FormData(event.currentTarget);
+    const startDate = form.get('travelStartDate');
+    const endDate = form.get('travelEndDate');
+    const nights = dateMode === 'exact' ? differenceInCalendarDays(parseISO(endDate), parseISO(startDate)) : Number(form.get('nights'));
+    if (nights < 1) {
+      setError('Travel end must be after travel start.');
+      return;
+    }
+    const deadline = form.get('responseDeadline');
+    setSaving(true);
+    const failure = await onSave({
+      travel_start_date: dateMode === 'exact' ? startDate : null,
+      travel_end_date: dateMode === 'exact' ? endDate : null,
+      travel_month: dateMode === 'month' ? form.get('travelMonth') : null,
+      nights,
+      adults: Number(form.get('adults')),
+      children: Number(form.get('children')),
+      infants: Number(form.get('infants')),
+      room_count: form.get('roomCount') ? Number(form.get('roomCount')) : null,
+      response_deadline: deadline ? new Date(deadline).toISOString() : null,
+      note: form.get('note') || null,
+    });
+    setSaving(false);
+    if (failure) setError(failure);
+  }
+
+  return (
+    <div className="modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
+      <section className="modal request-modal" role="dialog" aria-modal="true" aria-labelledby="trip-change-title">
+        <div className="modal-heading"><div><p className="eyebrow">REQUEST {request.requestCode}</p><h2 id="trip-change-title">Change trip details</h2></div><button className="icon-button" aria-label="Close dialog" onClick={onClose}><X size={18} /></button></div>
+        <p className="modal-copy">Matched sellers are notified. Offers already received must be re-confirmed or revised by the seller before you can award them.</p>
+        {!reference ? <div className="empty-state">Loading request options...</div> : (
+          <form className="request-form" onSubmit={submit}>
+            <div className="request-form-grid"><label className="field-label">Date mode<select className="form-select" value={dateMode} onChange={(event) => setDateMode(event.target.value)}><option value="exact">Exact dates</option><option value="month">Month and nights</option></select></label>{dateMode === 'exact' ? <><label className="field-label">Arrival<input className="form-input" name="travelStartDate" type="date" min={format(now, 'yyyy-MM-dd')} defaultValue={request.travelStartDate ?? ''} required /></label><label className="field-label">Departure<input className="form-input" name="travelEndDate" type="date" min={format(now, 'yyyy-MM-dd')} defaultValue={request.travelEndDate ?? ''} required /></label></> : <><label className="field-label">Travel month<input className="form-input" name="travelMonth" type="month" min={format(now, 'yyyy-MM')} defaultValue={request.travelMonth ?? ''} required /></label><label className="field-label">Nights<input className="form-input" name="nights" type="number" min="1" max="90" defaultValue={request.nights} required /></label></>}
+              <label className="field-label">Adults<input className="form-input" name="adults" type="number" min="1" max="100" defaultValue={request.adults} required /></label><label className="field-label">Children<input className="form-input" name="children" type="number" min="0" max="80" defaultValue={request.children} /></label><label className="field-label">Infants<input className="form-input" name="infants" type="number" min="0" max="40" defaultValue={request.infants} /></label><label className="field-label">Rooms<input className="form-input" name="roomCount" type="number" min="1" max="50" defaultValue={request.roomCount ?? ''} /></label></div>
+            <label className="field-label">{needsExtension ? 'New response deadline (required: sellers need time to re-confirm)' : 'Extend response deadline (optional)'}<input className="form-input" name="responseDeadline" type="datetime-local" required={needsExtension} min={format(earliestDeadline, deadlineInputFormat)} max={format(addDays(now, deadlineLimits.maxDays), deadlineInputFormat)} /></label>
+            <label className="field-label">Note to sellers (optional)<textarea className="form-input" name="note" maxLength="500" placeholder="For example: client added one adult and moved arrival by a day" /></label>
+            <small className="table-secondary">Do not include traveller names, contact details or links.</small>
+            {error && <p className="auth-error" role="alert">{error}</p>}
+            <div className="modal-actions"><button type="button" className="secondary-button" onClick={onClose}>Cancel</button><button type="submit" className="primary-button" disabled={saving}>{saving ? 'Saving...' : 'Save and notify sellers'}</button></div>
+          </form>
+        )}
+      </section>
+    </div>
+  );
+}
+
 function MessageThreadModal({ requestId, requestCode, sellerOrganizationId = '', peerName, onReport, onClose }) {
+  const { data: reference } = useReferenceData();
+  const [file, setFile] = useState(null);
   const [messages, setMessages] = useState([]);
   const [message, setMessage] = useState('');
   const [loading, setLoading] = useState(true);
@@ -701,13 +918,16 @@ function MessageThreadModal({ requestId, requestCode, sellerOrganizationId = '',
 
   async function submit(event) {
     event.preventDefault();
-    if (!message.trim() || sending) return;
+    if ((!message.trim() && !file) || sending) return;
     setSending(true);
     setError('');
     try {
-      const result = await sendRequestMessage(requestId, message, sellerOrganizationId);
+      const result = file
+        ? await sendMessageAttachment(requestId, file, { body: message, sellerOrganizationId })
+        : await sendRequestMessage(requestId, message, sellerOrganizationId);
       setMessages((current) => [...current, result.message]);
       setMessage('');
+      setFile(null);
     } catch (requestError) {
       setError(requestError.message);
     } finally {
@@ -720,12 +940,18 @@ function MessageThreadModal({ requestId, requestCode, sellerOrganizationId = '',
       <section className="modal message-modal" role="dialog" aria-modal="true" aria-labelledby="message-thread-title">
         <div className="modal-heading"><div><p className="eyebrow">REQUEST {requestCode}</p><h2 id="message-thread-title">Conversation with {peerName}</h2></div><button className="icon-button" aria-label="Close conversation" onClick={onClose}><X size={18} /></button></div>
         <div className="message-thread" aria-live="polite">
-          {loading ? <div className="empty-state">Loading conversation...</div> : messages.length ? messages.map((item) => <article className={`message-bubble ${item.isMine ? 'mine' : ''}`} key={item.id}><strong>{item.isMine ? 'You' : item.senderName}</strong><p>{item.body}</p><time>{new Date(item.createdAt).toLocaleString()}</time>{!item.isMine && onReport && <button className="text-button report-link" onClick={() => onReport(item)}><Flag size={12} />Report</button>}</article>) : <div className="empty-state"><MessageSquareText size={22} /><strong>No messages yet</strong><span>Ask a question about this request or offer.</span></div>}
+          {loading ? <div className="empty-state">Loading conversation...</div> : messages.length ? messages.map((item) => <article className={`message-bubble ${item.isMine ? 'mine' : ''}`} key={item.id}><strong>{item.isMine ? 'You' : item.senderName}</strong><p>{item.body}</p>{item.attachments?.length > 0 && <AttachmentList attachments={item.attachments} />}<time>{new Date(item.createdAt).toLocaleString()}</time>{!item.isMine && onReport && <button className="text-button report-link" onClick={() => onReport(item)}><Flag size={12} />Report</button>}</article>) : <div className="empty-state"><MessageSquareText size={22} /><strong>No messages yet</strong><span>Ask a question about this request or offer.</span></div>}
         </div>
         <form className="message-compose" onSubmit={submit}>
           <label className="visually-hidden" htmlFor="marketplace-message">Message</label>
-          <textarea id="marketplace-message" value={message} onChange={(event) => setMessage(event.target.value)} maxLength="4000" placeholder="Write a message about this request" required />
-          <div><small>Keep traveler contact details and external links out of marketplace messages.</small><button className="primary-button" disabled={sending || !message.trim()}>{sending ? 'Sending...' : 'Send message'}</button></div>
+          <textarea id="marketplace-message" value={message} onChange={(event) => setMessage(event.target.value)} maxLength="4000" placeholder={file ? 'Optional note with the file' : 'Write a message about this request'} required={!file} />
+          <div>
+            <small>Keep traveler contact details and external links out of marketplace messages.</small>
+            {file
+              ? <span className="attachment-chip"><Paperclip size={13} />{file.name}<button type="button" className="icon-button" aria-label="Remove file" onClick={() => setFile(null)}><X size={13} /></button></span>
+              : reference && <label className="secondary-button document-upload"><Paperclip size={14} />Attach file<input type="file" className="visually-hidden" accept={reference.limits.documentUpload.allowedMimeTypes.join(',')} onChange={(event) => { setFile(event.target.files[0] ?? null); event.target.value = ''; }} /></label>}
+            <button className="primary-button" disabled={sending || (!message.trim() && !file)}>{sending ? 'Sending...' : 'Send message'}</button>
+          </div>
         </form>
         {error && <p className="auth-error" role="alert">{error}</p>}
       </section>
@@ -737,6 +963,69 @@ function formatOfferPrice(offer) {
   return offer.kind === 'hotel_room'
     ? `${formatMinor(offer.ratePerNightMinor, offer.currency)} / room / night`
     : formatMinor(offer.totalMinor, offer.currency);
+}
+
+function NegotiationForm({ offer, onSubmit, onCancel }) {
+  const { data: reference } = useReferenceData();
+  const [kind, setKind] = useState('revision_request');
+  const [optionId, setOptionId] = useState('');
+  const [price, setPrice] = useState('');
+  const [message, setMessage] = useState('');
+  const [error, setError] = useState('');
+  const [saving, setSaving] = useState(false);
+  const counter = kind === 'counter_offer';
+  const option = offer.options?.find((item) => item.id === optionId);
+
+  async function submit(event) {
+    event.preventDefault();
+    setError('');
+    setSaving(true);
+    const failure = await onSubmit({
+      kind,
+      message: message.trim() || null,
+      offer_option_id: optionId || null,
+      counter_price_minor: counter ? toMinorUnits(price, offer.currency) : null,
+    });
+    setSaving(false);
+    if (failure) setError(failure);
+  }
+
+  return (
+    <form className="award-confirm" onSubmit={submit}>
+      <p className="modal-copy">Ask <strong>{offer.sellerName}</strong> to change this offer. The seller can revise it, accept your counter price, or decline. Each offer can be negotiated up to {reference?.limits.maxNegotiationRoundsPerOffer} times.</p>
+      <div className="request-form-grid">
+        <label className="field-label">Type<select className="form-select" value={kind} onChange={(event) => setKind(event.target.value)}>{reference?.negotiationKinds.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label>
+        {offer.options?.length > 0 && <label className="field-label">Option<select className="form-select" value={optionId} onChange={(event) => setOptionId(event.target.value)}><option value="">{offer.optionLabel ?? 'Main option'}</option>{offer.options.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}</select></label>}
+        {counter && <label className="field-label">{offer.kind === 'hotel_room' ? `Counter rate per room, per night (${offer.currency})` : `Counter total price (${offer.currency})`}<input className="form-input" type="number" min="0.01" step="any" value={price} onChange={(event) => setPrice(event.target.value)} required /></label>}
+      </div>
+      <small className="table-secondary">Current price: {formatOfferPrice(option ? { ...offer, ...option } : offer)}</small>
+      <label className="field-label">{counter ? 'Note to the seller (optional)' : 'What should the seller change?'}<textarea className="form-input" value={message} onChange={(event) => setMessage(event.target.value)} maxLength="1000" minLength={counter ? undefined : 5} required={!counter} placeholder="For example: client prefers a private guide on day two" /></label>
+      <small className="table-secondary">Do not include contact details or links.</small>
+      {error && <p className="auth-error" role="alert">{error}</p>}
+      <div className="modal-actions"><button type="button" className="secondary-button" onClick={onCancel} disabled={saving}>Back</button><button type="submit" className="primary-button" disabled={saving}>{saving ? 'Sending...' : 'Send to seller'}</button></div>
+    </form>
+  );
+}
+
+function OfferOptionList({ offer, reference, canAward, onAward }) {
+  if (!offer.options?.length) return null;
+  return (
+    <div className="offer-option-list">
+      <small>Alternative options (same terms)</small>
+      <ul>{offer.options.map((option) => {
+        const details = offer.kind === 'hotel_room'
+          ? [option.roomType, labelFor(reference?.mealPlans, option.mealPlan)]
+          : [labelFor(reference?.hotelCategories, option.hotelCategory)];
+        return (
+          <li key={option.id}>
+            <span><strong>{option.label}</strong> {[...details, option.notes].filter(Boolean).join(' / ')}</span>
+            <span>{formatOfferPrice({ ...offer, ...option })}{option.perTravellerMinor != null ? ` (${formatMinor(option.perTravellerMinor, offer.currency)} per traveller)` : ''}</span>
+            {canAward && <button className="secondary-button" disabled={offer.needsReconfirmation} onClick={() => onAward(option)}>Award this option</button>}
+          </li>
+        );
+      })}</ul>
+    </div>
+  );
 }
 
 function NotificationPopover({ notifications, unreadCount, loading, onClose, onRead, onReadAll }) {
@@ -754,6 +1043,7 @@ function NotificationPopover({ notifications, unreadCount, loading, onClose, onR
 function pageSubtitle(page, role) {
   if (page === 'Security') return 'Manage authenticator sign-in and recovery codes.';
   if (page === 'Integrations') return 'Send marketplace events to your CRM as signed webhooks.';
+  if (page === 'Verification') return 'Upload business documents so sellers see your agency as verified.';
   if (page === 'Bookings') return role === 'agency'
     ? 'Confirm awarded offers, share guest details and track seller confirmations.'
     : 'Won bookings, guest details shared by the agency and your confirmations.';

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
-import { FileCheck2, FileWarning, Upload } from 'lucide-react';
-import { getSellerDocuments, uploadSellerDocument } from './api.js';
+import { BadgeCheck, FileCheck2, FileWarning, Send, Upload } from 'lucide-react';
+import { getVerificationDocuments, submitAgencyVerification, uploadVerificationDocument } from './api.js';
 import { useCan } from './capabilities.js';
 import { labelFor, useReferenceData } from './referenceData.js';
 
@@ -15,17 +15,19 @@ export function documentStateClass(document) {
   return document.scanStatus === 'pending' ? 'draft' : 'cancelled';
 }
 
-export function SellerDocuments({ onUploaded }) {
+// Agencies submit explicitly once their files are uploaded; sellers are queued by their profile instead.
+export function VerificationDocuments({ onUploaded, submittable = false }) {
   const { data: reference } = useReferenceData();
   const canManage = useCan('profile.manage');
   const [state, setState] = useState(null);
   const [error, setError] = useState('');
   const [uploadingType, setUploadingType] = useState('');
+  const [submitting, setSubmitting] = useState(false);
   const limits = reference?.limits?.documentUpload;
 
   async function refresh() {
     try {
-      setState(await getSellerDocuments());
+      setState(await getVerificationDocuments());
     } catch (requestError) {
       setError(requestError.message);
     }
@@ -44,7 +46,7 @@ export function SellerDocuments({ onUploaded }) {
     setUploadingType(type);
     setError('');
     try {
-      const result = await uploadSellerDocument(type, file);
+      const result = await uploadVerificationDocument(type, file);
       await refresh();
       onUploaded?.(result);
     } catch (requestError) {
@@ -54,10 +56,33 @@ export function SellerDocuments({ onUploaded }) {
     }
   }
 
+  async function submitForReview() {
+    setSubmitting(true);
+    setError('');
+    try {
+      await submitAgencyVerification();
+      await refresh();
+    } catch (requestError) {
+      setError(requestError.message);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  const verification = state?.verification;
+  const canSubmit = submittable && ['unsubmitted', 'rejected'].includes(verification?.status);
+
   return (
     <div className="seller-documents">
       <div className="section-heading"><div><p className="eyebrow">VERIFICATION DOCUMENTS</p><h3>Business proof</h3></div>{state && <span className={`status-pill ${state.complete ? 'open' : 'draft'}`}><i />{state.complete ? 'Ready for review' : `${state.missing.length} required missing`}</span>}</div>
       {error && <div className="auth-error" role="alert">{error}</div>}
+      {submittable && verification && <div className="verification-summary">
+        <span className={`status-pill ${verification.status === 'approved' ? 'open' : verification.status === 'rejected' ? 'cancelled' : 'draft'}`}><i />{labelFor(reference?.agencyVerificationStatuses, verification.status)}</span>
+        {verification.reason && <span>Reviewer note: {verification.reason}</span>}
+        {verification.status === 'pending' && verification.submittedAt && <span>Submitted {new Date(verification.submittedAt).toLocaleDateString()}</span>}
+        {canSubmit && <button className="primary-button" disabled={!canManage || submitting || state.notUploaded.length > 0} title={state.notUploaded.length ? 'Upload every required document first.' : canManage ? undefined : 'Only owners and managers can submit for review.'} onClick={submitForReview}><Send size={14} />{submitting ? 'Submitting...' : 'Submit for review'}</button>}
+        {verification.status === 'approved' && <span><BadgeCheck size={14} />Sellers see a verified badge on your requests.</span>}
+      </div>}
       {state && !state.storageConfigured && <p className="privacy-note"><FileWarning size={15} />Document upload is not available yet: private file storage has not been configured for this platform.</p>}
       {!state ? <div className="empty-state">Loading documents...</div> : <ul className="document-list">
         {state.requirements.map((item) => {

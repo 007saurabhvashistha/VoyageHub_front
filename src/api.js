@@ -117,11 +117,56 @@ export function submitHotelOffer(requestId, offer) {
   return request(`/v1/marketplace/requests/${requestId}/offers`, { method: 'POST', body: JSON.stringify(offer) }, true);
 }
 
-export function awardMarketplaceOffer(requestId, offerId, notSelectedReason = '') {
+export function awardMarketplaceOffer(requestId, selections, notSelectedReason = '') {
   return request(`/v1/marketplace/requests/${requestId}/award`, {
     method: 'POST',
-    body: JSON.stringify({ offer_id: offerId, ...(notSelectedReason.trim() ? { not_selected_reason: notSelectedReason.trim() } : {}) }),
+    body: JSON.stringify({
+      selections: selections.map((selection) => ({ offer_id: selection.offerId, offer_option_id: selection.optionId ?? null })),
+      ...(notSelectedReason.trim() ? { not_selected_reason: notSelectedReason.trim() } : {}),
+    }),
   }, true);
+}
+
+export function undoMarketplaceAward(requestId, reason = '') {
+  return request(`/v1/marketplace/requests/${requestId}/award/undo`, { method: 'POST', body: JSON.stringify(reason.trim() ? { reason: reason.trim() } : {}) }, true);
+}
+
+export function createOfferNegotiation(offerId, negotiation) {
+  return request(`/v1/marketplace/offers/${offerId}/negotiations`, { method: 'POST', body: JSON.stringify(negotiation) }, true);
+}
+
+export function withdrawOfferNegotiation(negotiationId) {
+  return request(`/v1/marketplace/negotiations/${negotiationId}/withdraw`, { method: 'POST', body: JSON.stringify({}) }, true);
+}
+
+export function acceptOfferNegotiation(negotiationId) {
+  return request(`/v1/marketplace/negotiations/${negotiationId}/accept`, { method: 'POST', body: JSON.stringify({}) }, true);
+}
+
+export function declineOfferNegotiation(negotiationId, note) {
+  return request(`/v1/marketplace/negotiations/${negotiationId}/decline`, { method: 'POST', body: JSON.stringify({ note }) }, true);
+}
+
+export function uploadOfferAttachment(offerId, file) {
+  const body = new FormData();
+  body.append('file', file);
+  return request(`/v1/attachments/offers/${offerId}`, { method: 'POST', body }, true);
+}
+
+export function removeAttachment(attachmentId) {
+  return request(`/v1/attachments/${attachmentId}`, { method: 'DELETE' }, true);
+}
+
+export function sendMessageAttachment(requestId, file, { body = '', sellerOrganizationId = '' } = {}) {
+  const form = new FormData();
+  if (sellerOrganizationId) form.append('seller_organization_id', sellerOrganizationId);
+  if (body.trim()) form.append('body', body.trim());
+  form.append('file', file);
+  return request(`/v1/attachments/requests/${requestId}/messages`, { method: 'POST', body: form }, true);
+}
+
+export function createAttachmentDownloadUrl(attachmentId) {
+  return request(`/v1/attachments/${attachmentId}/download-url`, { method: 'POST', body: JSON.stringify({}) }, true);
 }
 
 export function getSellerProfile() {
@@ -182,19 +227,34 @@ export function decideSellerVerification(organizationId, decision, reason) {
   }, true);
 }
 
-export function getSellerDocuments() {
-  return request('/v1/seller-documents');
+export function getVerificationDocuments() {
+  return request('/v1/verification-documents');
 }
 
-export function uploadSellerDocument(documentType, file) {
+export function uploadVerificationDocument(documentType, file) {
   const body = new FormData();
   body.append('document_type', documentType);
   body.append('file', file);
-  return request('/v1/seller-documents', { method: 'POST', body }, true);
+  return request('/v1/verification-documents', { method: 'POST', body }, true);
 }
 
-export function getAdminSellerDocuments(organizationId) {
-  return request(`/v1/admin/seller-profiles/${organizationId}/documents`);
+export function submitAgencyVerification() {
+  return request('/v1/verification-documents/submit', { method: 'POST', body: JSON.stringify({}) }, true);
+}
+
+export function getAdminOrganizationDocuments(organizationId) {
+  return request(`/v1/admin/organizations/${organizationId}/documents`);
+}
+
+export function listPendingAgencyVerifications() {
+  return request('/v1/admin/agency-verifications/pending');
+}
+
+export function decideAgencyVerification(organizationId, decision, reason) {
+  return request(`/v1/admin/agency-verifications/${organizationId}/decision`, {
+    method: 'POST',
+    body: JSON.stringify({ decision, reason }),
+  }, true);
 }
 
 export function createDocumentDownloadUrl(documentId) {
@@ -342,6 +402,14 @@ export function closeMarketplaceRequest(requestId) {
   return request(`/v1/marketplace/requests/${requestId}/close`, { method: 'POST', body: JSON.stringify({}) }, true);
 }
 
+export function changeRequestTrip(requestId, trip) {
+  return request(`/v1/marketplace/requests/${requestId}/trip`, { method: 'PATCH', body: JSON.stringify(trip) }, true);
+}
+
+export function reconfirmMarketplaceOffer(offerId, tripVersion) {
+  return request(`/v1/marketplace/offers/${offerId}/reconfirm`, { method: 'POST', body: JSON.stringify({ trip_version: tripVersion }) }, true);
+}
+
 export function declineMarketplaceRequest(requestId, reason) {
   return request(`/v1/marketplace/requests/${requestId}/decline`, { method: 'POST', body: JSON.stringify({ reason }) }, true);
 }
@@ -372,6 +440,18 @@ export function listBookings() {
 
 export function getBooking(awardId) {
   return request(`/v1/bookings/${awardId}`);
+}
+
+export function requestBookingChange(awardId, change) {
+  return request(`/v1/bookings/${awardId}/changes`, { method: 'POST', body: JSON.stringify(change) }, true);
+}
+
+export function answerBookingChange(awardId, changeId, action, note = '') {
+  return request(`/v1/bookings/${awardId}/changes/${changeId}/${action}`, { method: 'POST', body: JSON.stringify(note.trim() ? { note: note.trim() } : {}) }, true);
+}
+
+export function withdrawBookingChange(awardId, changeId) {
+  return request(`/v1/bookings/${awardId}/changes/${changeId}/withdraw`, { method: 'POST', body: JSON.stringify({}) }, true);
 }
 
 export function confirmBooking(awardId, guestDetails) {

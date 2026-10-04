@@ -347,6 +347,13 @@ h2 { margin-bottom: 0; font-size: 16px; font-weight: 700; line-height: 1.3; }
 .moderation-details { margin: 6px 0; font-size: 12px; }
 .moderation-search { margin: 0 0 10px; }
 @media (max-width: 720px) { .line-item-row { grid-template-columns: 1fr 1fr; } }
+.offer-option-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 110px minmax(0, 1.2fr) auto; align-items: center; gap: 6px; }
+.offer-option-row.hotel-option { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 110px 110px minmax(0, 1.2fr) auto; }
+.offer-option-row input, .offer-option-row select { min-width: 0; padding: 6px; border: 1px solid var(--line); border-radius: 4px; font-size: 11px; }
+@media (max-width: 720px) { .offer-option-row, .offer-option-row.hotel-option { grid-template-columns: 1fr 1fr; } }
+.offer-option-list { display: grid; gap: 4px; margin-top: 6px; }
+.offer-option-list li { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 4px; list-style: none; }
+.offer-option-list ul { margin: 0; padding: 0; }
 .budget-title { margin: 5px 0 -3px; }
 .budget-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .request-preview-list { display: grid; gap: 0; margin: 0; border-top: 1px solid var(--line); }
@@ -517,6 +524,33 @@ h2 { margin-bottom: 0; font-size: 16px; font-weight: 700; line-height: 1.3; }
 .document-main span { overflow: hidden; color: #7D8993; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .document-upload { position: relative; min-height: 32px; font-size: 11px; cursor: pointer; }
 .document-upload.disabled { cursor: not-allowed; opacity: .5; }
+.attachment-list { display: grid; gap: 4px; margin: 4px 0; padding: 0; list-style: none; }
+.attachment-list li { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 11px; }
+.attachment-list li > span { display: inline-flex; min-width: 0; align-items: center; gap: 5px; overflow-wrap: anywhere; }
+.attachment-list small { color: #84909A; font-size: 10px; }
+.attachment-chip { display: inline-flex; align-items: center; gap: 5px; max-width: 220px; overflow: hidden; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.booking-change-section { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--line); }
+.booking-change-section h3 { margin: 0; color: var(--navy); font-size: 14px; }
+.booking-change-list { display: grid; gap: 8px; margin: 0 0 14px; padding: 0; list-style: none; }
+.booking-change-list > li { display: grid; gap: 5px; padding: 10px; border: 1px solid var(--line); border-radius: 4px; }
+.booking-change-heading, .booking-change-response { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; }
+.booking-change-list p { margin: 0; color: #465462; font-size: 12px; }
+.booking-change-list small, .booking-change-list time { color: #84909A; font-size: 10px; }
+.booking-change-response .form-input { flex: 1 1 180px; }
+.booking-change-form { display: grid; gap: 10px; padding-top: 10px; border-top: 1px solid var(--line); }
+.booking-change-form .modal-actions { justify-content: flex-start; margin: 0; }
+.verification-summary { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; margin: 12px 0 4px; color: #5E6974; font-size: 11px; }
+.verification-summary span:not(.status-pill) { display: inline-flex; align-items: center; gap: 5px; }
+.verification-summary .primary-button { min-height: 32px; font-size: 11px; }
+.trip-change-note { display: flex; align-items: flex-start; gap: 6px; margin: 8px 0 0; padding: 7px 9px; color: #8A7141; background: #F8F3E8; border-radius: 4px; font-size: 10px; line-height: 1.45; }
+.trip-change-note svg { flex: none; margin-top: 1px; }
+.negotiation-notice { display: grid; gap: 6px; margin: 8px 0 0; padding: 8px 9px; color: #2F5F73; background: #EAF3F6; border-radius: 4px; font-size: 10px; line-height: 1.45; }
+.negotiation-notice p { margin: 0; }
+.negotiation-notice .modal-actions { justify-content: flex-start; margin: 0; }
+.negotiation-notice textarea { min-height: 54px; }
+.trip-summary { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; margin: 0 0 10px; color: #5E6974; font-size: 11px; }
+.trip-summary > span:not(.status-pill) { display: inline-flex; align-items: center; gap: 5px; }
+.trip-summary .secondary-button { min-height: 30px; margin-left: auto; font-size: 10px; }
 .guest-list { display: grid; gap: 12px; margin: 12px 0; }
 .inline-form { display: inline-flex; align-items: center; gap: 8px; }
 .inline-form .form-input { min-width: 220px; }
