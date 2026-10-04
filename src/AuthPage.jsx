@@ -1,7 +1,10 @@
 import { useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { ArrowRight, Building2, Globe2, Hotel, LockKeyhole, Mail, MapPin, UserRound } from 'lucide-react';
 import { loginAccount, registerAccount } from './api.js';
+import { useReferenceData } from './referenceData.js';
+import { DestinationPicker } from './DestinationPicker.jsx';
+import { LegalConsent, LegalLinks, requiredDocumentIds, useLegalDocuments } from './Legal.jsx';
 
 const accountTypes = [
   { id: 'agency', label: 'Travel agency', detail: 'Source and compare destination offers', icon: Building2 },
@@ -9,23 +12,19 @@ const accountTypes = [
   { id: 'hotelier', label: 'Hotelier', detail: 'Manage room requests and availability', icon: Hotel },
 ];
 
-const countries = [
-  { code: 'IN', name: 'India' },
-  { code: 'AE', name: 'United Arab Emirates' },
-  { code: 'GB', name: 'United Kingdom' },
-  { code: 'US', name: 'United States' },
-  { code: 'JP', name: 'Japan' },
-  { code: 'PT', name: 'Portugal' },
-  { code: 'MA', name: 'Morocco' },
-  { code: 'ZA', name: 'South Africa' },
-];
-
 function AuthPage({ mode }) {
   const navigate = useNavigate();
+  const location = useLocation();
+  const { data: reference } = useReferenceData();
+  const legal = useLegalDocuments();
+  const countries = reference?.countries ?? [];
   const [selectedRole, setSelectedRole] = useState('agency');
+  const [coverage, setCoverage] = useState([]);
+  const [propertyCity, setPropertyCity] = useState([]);
+  const [legalAccepted, setLegalAccepted] = useState(false);
   const [error, setError] = useState('');
   const [errorCode, setErrorCode] = useState('');
-  const [notice, setNotice] = useState('');
+  const [notice, setNotice] = useState(location.state?.notice ?? '');
   const [submittedEmail, setSubmittedEmail] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const isRegister = mode === 'register';
@@ -35,6 +34,14 @@ function AuthPage({ mode }) {
     setError('');
     setErrorCode('');
     setNotice('');
+    if (isRegister && selectedRole === 'dmc' && !coverage.length) {
+      setError('Add at least one destination your DMC serves.');
+      return;
+    }
+    if (isRegister && selectedRole === 'hotelier' && !propertyCity.length) {
+      setError('Choose the city where your property is located.');
+      return;
+    }
     setSubmitting(true);
     const form = new FormData(event.currentTarget);
     setSubmittedEmail(String(form.get('email') ?? ''));
@@ -45,8 +52,9 @@ function AuthPage({ mode }) {
           email: form.get('email'),
           country_code: form.get('country'),
           business_type: selectedRole,
-          ...(selectedRole === 'dmc' ? { coverage_destinations: form.get('coverageDestinations') } : {}),
-          ...(selectedRole === 'hotelier' ? { property_city: form.get('propertyCity') } : {}),
+          ...(selectedRole === 'dmc' ? { coverage_destination_ids: coverage.map((destination) => destination.id) } : {}),
+          ...(selectedRole === 'hotelier' ? { property_destination_id: propertyCity[0].id } : {}),
+          accepted_legal_document_ids: legalAccepted ? requiredDocumentIds(legal.documents, 'owner') : [],
           password: form.get('password'),
         }
       : {
@@ -115,20 +123,22 @@ function AuthPage({ mode }) {
             <div className="auth-fields">
               {isRegister && <label className="auth-field"><span>Full name</span><span className="auth-input"><UserRound size={16} /><input name="fullName" autoComplete="name" placeholder="Your name" required /></span></label>}
               {isRegister && <label className="auth-field"><span>Business name</span><span className="auth-input"><Building2 size={16} /><input name="businessName" autoComplete="organization" placeholder="Company or property name" required /></span></label>}
-              {isRegister && selectedRole === 'dmc' && <label className="auth-field"><span>Destination coverage</span><span className="auth-input"><Globe2 size={16} /><input name="coverageDestinations" placeholder="Kyoto, Japan, Morocco" required /></span></label>}
-              {isRegister && selectedRole === 'hotelier' && <label className="auth-field"><span>Property city</span><span className="auth-input"><MapPin size={16} /><input name="propertyCity" placeholder="Kyoto" required /></span></label>}
+              {isRegister && selectedRole === 'dmc' && <DestinationPicker label="Destination coverage" value={coverage} onChange={setCoverage} multiple max={reference?.limits?.maxCoverageDestinations ?? 1} />}
+              {isRegister && selectedRole === 'hotelier' && <DestinationPicker label="Property city" value={propertyCity} onChange={setPropertyCity} kinds={['city']} placeholder="Search your city" />}
               <label className="auth-field"><span>Business email</span><span className="auth-input"><Mail size={16} /><input name="email" type="email" autoComplete="email" placeholder="you@company.com" required /></span></label>
-              {isRegister && <label className="auth-field"><span>Country or region</span><span className="auth-input"><MapPin size={16} /><select name="country" defaultValue="" required><option value="" disabled>Select country</option>{countries.map((country) => <option key={country.code} value={country.code}>{country.name}</option>)}</select></span></label>}
+              {isRegister && <label className="auth-field"><span>Country or region</span><span className="auth-input"><MapPin size={16} /><select name="country" key={reference?.defaults?.country ?? 'loading'} defaultValue={reference?.defaults?.country ?? ''} required><option value="" disabled>{reference ? 'Select country' : 'Loading countries...'}</option>{countries.map((country) => <option key={country.code} value={country.code}>{country.name}</option>)}</select></span></label>}
               <label className="auth-field"><span>Password</span><span className="auth-input"><LockKeyhole size={16} /><input name="password" type="password" autoComplete={isRegister ? 'new-password' : 'current-password'} minLength={8} placeholder="At least 8 characters" required /></span></label>
             </div>
 
+            {isRegister && <LegalConsent documents={legal.documents} audience="owner" checked={legalAccepted} onChange={setLegalAccepted} />}
             {error && <p className="auth-error" role="alert">{error}</p>}
             {errorCode === 'EMAIL_NOT_VERIFIED' && <Link className="auth-inline-link" to={`/verify-email?email=${encodeURIComponent(submittedEmail)}`}>Resend verification email</Link>}
-            {notice && <p className="auth-success" role="status">{notice} <Link to={`/verify-email?email=${encodeURIComponent(submittedEmail)}`}>Request verification email</Link></p>}
+            {notice && <p className="auth-success" role="status">{notice} {isRegister && <Link to={`/verify-email?email=${encodeURIComponent(submittedEmail)}`}>Request verification email</Link>}</p>}
             <button className="auth-submit" type="submit" disabled={submitting}>{submitting ? 'Please wait...' : isRegister ? 'Create account' : 'Sign in'}<ArrowRight size={17} /></button>
           </form>
 
           <div className="auth-switch">{isRegister ? 'Already registered?' : 'New to Lead Exchange?'} <Link to={isRegister ? '/login' : '/register'}>{isRegister ? 'Sign in' : 'Create an account'}</Link>{!isRegister && <> <span>·</span> <Link to="/forgot-password">Forgot password?</Link></>}</div>
+          <LegalLinks />
         </section>
 
         <aside className="auth-visual">

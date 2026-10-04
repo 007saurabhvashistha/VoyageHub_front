@@ -7,7 +7,7 @@ async function request(path, options = {}, csrfRequired = false, csrfPath = '/v1
   }
 
   const headers = {
-    ...(options.body ? { 'content-type': 'application/json' } : {}),
+    ...(typeof options.body === 'string' ? { 'content-type': 'application/json' } : {}),
     ...options.headers,
   };
   if (csrfRequired) headers['x-csrf-token'] = csrfToken;
@@ -182,6 +182,25 @@ export function decideSellerVerification(organizationId, decision, reason) {
   }, true);
 }
 
+export function getSellerDocuments() {
+  return request('/v1/seller-documents');
+}
+
+export function uploadSellerDocument(documentType, file) {
+  const body = new FormData();
+  body.append('document_type', documentType);
+  body.append('file', file);
+  return request('/v1/seller-documents', { method: 'POST', body }, true);
+}
+
+export function getAdminSellerDocuments(organizationId) {
+  return request(`/v1/admin/seller-profiles/${organizationId}/documents`);
+}
+
+export function createDocumentDownloadUrl(documentId) {
+  return request(`/v1/admin/documents/${documentId}/download-url`, { method: 'POST', body: JSON.stringify({}) }, true);
+}
+
 export function getNotificationOutbox(status = '') {
   const query = status ? `?status=${encodeURIComponent(status)}` : '';
   return request(`/v1/admin/notification-outbox${query}`);
@@ -195,8 +214,128 @@ export function getPlatformSettings() {
   return request('/v1/admin/settings');
 }
 
-export function updateMaxOffersPerRequest(value) {
-  return request('/v1/admin/settings/max-offers-per-request', { method: 'PUT', body: JSON.stringify({ value }) }, true);
+export function getReferenceData() {
+  return request('/v1/reference-data');
+}
+
+export function listTeamMembers() {
+  return request('/v1/organization/members');
+}
+
+export function listTeamInvitations() {
+  return request('/v1/organization/invitations');
+}
+
+export function inviteTeamMember(email, role) {
+  return request('/v1/organization/invitations', { method: 'POST', body: JSON.stringify({ email, role }) }, true);
+}
+
+export function revokeTeamInvitation(invitationId) {
+  return request(`/v1/organization/invitations/${invitationId}`, { method: 'DELETE' }, true);
+}
+
+export function updateTeamMemberRole(userId, role) {
+  return request(`/v1/organization/members/${userId}`, { method: 'PATCH', body: JSON.stringify({ role }) }, true);
+}
+
+export function removeTeamMember(userId) {
+  return request(`/v1/organization/members/${userId}`, { method: 'DELETE' }, true);
+}
+
+export function listTeamAuditEvents() {
+  return request('/v1/organization/audit-events');
+}
+
+export function previewInvitation(token) {
+  return request(`/v1/auth/invitations/preview?${new URLSearchParams({ token })}`);
+}
+
+export function acceptInvitation(token, fullName, password, acceptedLegalDocumentIds = []) {
+  return request('/v1/auth/invitations/accept', { method: 'POST', body: JSON.stringify({ token, full_name: fullName, password, accepted_legal_document_ids: acceptedLegalDocumentIds }) });
+}
+
+export function createReport(targetType, targetId, category, details) {
+  return request('/v1/marketplace/reports', { method: 'POST', body: JSON.stringify({ target_type: targetType, target_id: targetId, category, details }) }, true);
+}
+
+export function listAdminReports(status = 'open') {
+  return request(`/v1/admin/reports?${new URLSearchParams({ status })}`);
+}
+
+export function resolveAdminReport(reportId, decision, note) {
+  return request(`/v1/admin/reports/${reportId}/resolve`, { method: 'POST', body: JSON.stringify({ decision, note }) }, true);
+}
+
+export function listAdminOrganizations(search = '') {
+  return request(`/v1/admin/organizations?${new URLSearchParams({ search })}`);
+}
+
+export function suspendOrganization(organizationId, reason) {
+  return request(`/v1/admin/organizations/${organizationId}/suspend`, { method: 'POST', body: JSON.stringify({ reason }) }, true);
+}
+
+export function reinstateOrganization(organizationId, reason) {
+  return request(`/v1/admin/organizations/${organizationId}/reinstate`, { method: 'POST', body: JSON.stringify({ reason }) }, true);
+}
+
+export function updatePlatformSetting(key, value) {
+  return request(`/v1/admin/settings/${encodeURIComponent(key)}`, { method: 'PUT', body: JSON.stringify({ value }) }, true);
+}
+
+export function searchDestinations(query, { kinds = [], country = '' } = {}) {
+  const params = new URLSearchParams({ q: query });
+  if (kinds.length) params.set('kinds', kinds.join(','));
+  if (country) params.set('country', country);
+  return request(`/v1/reference-data/destinations?${params}`);
+}
+
+export function listAdminDestinations({ q = '', country = '', kind = '' } = {}) {
+  const params = new URLSearchParams({ q });
+  if (country) params.set('country', country);
+  if (kind) params.set('kind', kind);
+  return request(`/v1/admin/destinations?${params}`);
+}
+
+export function createAdminDestination(destination) {
+  return request('/v1/admin/destinations', { method: 'POST', body: JSON.stringify(destination) }, true);
+}
+
+export function updateAdminDestination(destinationId, changes) {
+  return request(`/v1/admin/destinations/${destinationId}`, { method: 'PATCH', body: JSON.stringify(changes) }, true);
+}
+
+export function listLegalDocuments() {
+  return request('/v1/legal/documents');
+}
+
+export function getLegalDocument(type) {
+  return request(`/v1/legal/documents/${encodeURIComponent(type)}`);
+}
+
+export function acceptLegalDocuments(documentIds) {
+  return request('/v1/legal/acceptances', { method: 'POST', body: JSON.stringify({ document_ids: documentIds }) }, true);
+}
+
+export function listAdminLegalDocuments() {
+  return request('/v1/admin/legal/documents');
+}
+
+export function publishLegalDocument(document) {
+  return request('/v1/admin/legal/documents', { method: 'POST', body: JSON.stringify(document) }, true);
+}
+
+export function exportAccountData() {
+  return request('/v1/account/export');
+}
+
+export async function requestAccountDeletion(password) {
+  const result = await request('/v1/account/deletion', { method: 'POST', body: JSON.stringify({ password }) }, true);
+  csrfToken = '';
+  return result;
+}
+
+export function cancelAccountDeletion() {
+  return request('/v1/account/deletion/cancel', { method: 'POST', body: JSON.stringify({}) }, true);
 }
 
 export function closeMarketplaceRequest(requestId) {
@@ -225,4 +364,86 @@ export function withdrawMarketplaceOffer(offerId) {
 
 export function getMarketplaceAward(awardId) {
   return request(`/v1/marketplace/awards/${awardId}`);
+}
+
+export function listBookings() {
+  return request('/v1/bookings');
+}
+
+export function getBooking(awardId) {
+  return request(`/v1/bookings/${awardId}`);
+}
+
+export function confirmBooking(awardId, guestDetails) {
+  return request(`/v1/bookings/${awardId}/confirm`, { method: 'POST', body: JSON.stringify(guestDetails) }, true);
+}
+
+export function getGuestDetails(awardId) {
+  return request(`/v1/bookings/${awardId}/guest-details`);
+}
+
+export function correctGuestDetails(awardId, guestDetails) {
+  return request(`/v1/bookings/${awardId}/guest-details`, { method: 'PUT', body: JSON.stringify(guestDetails) }, true);
+}
+
+export function revokeGuestDetails(awardId, reason) {
+  return request(`/v1/bookings/${awardId}/guest-details/revoke`, { method: 'POST', body: JSON.stringify({ reason }) }, true);
+}
+
+export function restoreGuestDetails(awardId) {
+  return request(`/v1/bookings/${awardId}/guest-details/restore`, { method: 'POST', body: JSON.stringify({}) }, true);
+}
+
+export function getGuestAccessLog(awardId) {
+  return request(`/v1/bookings/${awardId}/guest-details/access-log`);
+}
+
+export function listWebhookEndpoints() {
+  return request('/v1/webhooks/endpoints');
+}
+
+export function createWebhookEndpoint(endpoint) {
+  return request('/v1/webhooks/endpoints', { method: 'POST', body: JSON.stringify(endpoint) }, true);
+}
+
+export function updateWebhookEndpoint(endpointId, changes) {
+  return request(`/v1/webhooks/endpoints/${endpointId}`, { method: 'PATCH', body: JSON.stringify(changes) }, true);
+}
+
+export function deleteWebhookEndpoint(endpointId) {
+  return request(`/v1/webhooks/endpoints/${endpointId}`, { method: 'DELETE' }, true);
+}
+
+export function rotateWebhookSecret(endpointId) {
+  return request(`/v1/webhooks/endpoints/${endpointId}/rotate-secret`, { method: 'POST', body: JSON.stringify({}) }, true);
+}
+
+export function sendWebhookTest(endpointId) {
+  return request(`/v1/webhooks/endpoints/${endpointId}/test`, { method: 'POST', body: JSON.stringify({}) }, true);
+}
+
+export function listWebhookDeliveries(endpointId) {
+  return request(`/v1/webhooks/endpoints/${endpointId}/deliveries`);
+}
+
+export function retryWebhookDelivery(deliveryId) {
+  return request(`/v1/webhooks/deliveries/${deliveryId}/retry`, { method: 'POST', body: JSON.stringify({}) }, true);
+}
+
+export function getOperationsStatus() {
+  return request('/v1/admin/operations');
+}
+
+export function confirmBookingReference(awardId, confirmationNumber, note) {
+  return request(`/v1/bookings/${awardId}/seller-confirmation`, { method: 'POST', body: JSON.stringify({ confirmation_number: confirmationNumber, note: note || null }) }, true);
+}
+
+export function uploadBookingVoucher(awardId, file) {
+  const body = new FormData();
+  body.append('file', file);
+  return request(`/v1/bookings/${awardId}/vouchers`, { method: 'POST', body }, true);
+}
+
+export function createVoucherDownloadUrl(awardId, voucherId) {
+  return request(`/v1/bookings/${awardId}/vouchers/${voucherId}/download-url`, { method: 'POST', body: JSON.stringify({}) }, true);
 }

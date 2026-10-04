@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { lazy, Suspense, useEffect, useState } from 'react';
 import { BrowserRouter, Link, Navigate, Route, Routes, useNavigate, useParams } from 'react-router-dom';
 import {
   ArrowDownUp,
@@ -7,11 +7,13 @@ import {
   Bell,
   CalendarDays,
   Check,
+  ClipboardCheck,
   ChevronDown,
   ChevronRight,
   Building2,
   Clock3,
   FileText,
+  Flag,
   Globe2,
   LayoutDashboard,
   Hotel,
@@ -22,12 +24,26 @@ import {
   Search,
   ShieldCheck,
   UsersRound,
+  UserCog,
+  Webhook,
   X,
 } from 'lucide-react';
+import { addDays, addHours, differenceInCalendarDays, format, parseISO } from 'date-fns';
 import AuthPage from './AuthPage.jsx';
 import AuthActionPage from './AuthActionPage.jsx';
-import AdminWorkspace from './AdminWorkspace.jsx';
+import AcceptInvitePage from './AcceptInvitePage.jsx';
+import { TeamPanel } from './TeamPanel.jsx';
+import { OfferDetails, OfferFormModal } from './OfferForm.jsx';
+import { ReportDialog } from './ReportDialog.jsx';
+import { CapabilitiesContext, useCan } from './capabilities.js';
+import { formatMinor, toMinorUnits } from './money.js';
+import { labelFor, useReferenceData } from './referenceData.js';
 import { MfaChallengePage, MfaSecurityPanel, MfaSetupPage } from './MfaSecurity.jsx';
+import { CookieNotice, LegalAcceptanceGate, LegalLinks } from './Legal.jsx';
+import { AccountPanel, DeletionPendingPage } from './AccountPanel.jsx';
+import { DestinationPicker } from './DestinationPicker.jsx';
+import { BookingsWorkspace } from './Bookings.jsx';
+import { IntegrationsPanel } from './Integrations.jsx';
 import {
   awardMarketplaceOffer,
   createMarketplaceRequest,
@@ -60,9 +76,15 @@ import {
   RoleProfile,
 } from './RoleWorkspaces.jsx';
 
+// Markdown rendering is only needed on these screens, so they load on demand.
+const AdminWorkspace = lazy(() => import('./AdminWorkspace.jsx'));
+const LegalPage = lazy(() => import('./LegalPage.jsx'));
+const loadingScreen = <main className="auth-wait">Loading...</main>;
+
 function App() {
   return (
     <BrowserRouter>
+      <Suspense fallback={loadingScreen}>
       <Routes>
         <Route path="/" element={<Navigate to="/register" replace />} />
         <Route path="/register" element={<AuthPage mode="register" />} />
@@ -70,11 +92,15 @@ function App() {
         <Route path="/verify-email" element={<AuthActionPage mode="verify" />} />
         <Route path="/forgot-password" element={<AuthActionPage mode="forgot" />} />
         <Route path="/reset-password" element={<AuthActionPage mode="reset" />} />
+        <Route path="/accept-invite" element={<AcceptInvitePage />} />
         <Route path="/mfa-challenge" element={<MfaChallengePage />} />
         <Route path="/mfa-setup" element={<MfaSetupPage />} />
         <Route path="/workspace/:role/*" element={<WorkspaceRoute />} />
+        <Route path="/legal/:type" element={<LegalPage />} />
         <Route path="*" element={<Navigate to="/register" replace />} />
       </Routes>
+      </Suspense>
+      <CookieNotice />
     </BrowserRouter>
   );
 }
@@ -98,6 +124,12 @@ function WorkspaceRoute() {
   if (gate.status === 'signed_out') return <Navigate to="/login" replace />;
   if (gate.status === 'unavailable') {
     return <main className="auth-wait"><section><h1>Account service unavailable</h1><p>{gate.message}</p><Link to="/login">Return to sign in</Link></section></main>;
+  }
+  if (gate.account.account?.deletionRequestedAt) {
+    return <DeletionPendingPage account={gate.account} onCancelled={() => setGate({ status: 'authenticated', account: { ...gate.account, account: { ...gate.account.account, deletionRequestedAt: null, deletionScheduledFor: null, organizationClosureScheduledFor: null } } })} />;
+  }
+  if (gate.account.pendingLegalDocuments?.length) {
+    return <LegalAcceptanceGate documents={gate.account.pendingLegalDocuments} onAccepted={(pending) => setGate({ status: 'authenticated', account: { ...gate.account, pendingLegalDocuments: pending } })} />;
   }
   if (gate.account.user.isPlatformAdmin && role !== 'admin') return <Navigate to="/workspace/admin/verification" replace />;
   if (role === 'admin') {
@@ -128,25 +160,36 @@ function Workspace({ role, account }) {
       { label: 'Overview', icon: LayoutDashboard },
       { label: 'Requests', icon: FileText },
       { label: 'Offers', icon: MessageSquareText },
+      { label: 'Bookings', icon: ClipboardCheck },
       { label: 'Suppliers', icon: UsersRound },
+      { label: 'Team', icon: UserCog },
+      { label: 'Integrations', icon: Webhook, capability: 'integration.manage' },
       { label: 'Security', icon: ShieldCheck },
     ],
     dmc: [
       { label: 'Overview', icon: LayoutDashboard },
       { label: 'Matching requests', icon: FileText },
       { label: 'My offers', icon: MessageSquareText },
+      { label: 'Bookings', icon: ClipboardCheck },
       { label: 'Company profile', icon: Building2 },
+      { label: 'Team', icon: UserCog },
+      { label: 'Integrations', icon: Webhook, capability: 'integration.manage' },
       { label: 'Security', icon: ShieldCheck },
     ],
     hotelier: [
       { label: 'Overview', icon: LayoutDashboard },
       { label: 'Booking requests', icon: FileText },
+      { label: 'Bookings', icon: ClipboardCheck },
       { label: 'Properties', icon: Hotel },
       { label: 'Availability', icon: CalendarDays },
+      { label: 'Team', icon: UserCog },
+      { label: 'Integrations', icon: Webhook, capability: 'integration.manage' },
       { label: 'Security', icon: ShieldCheck },
     ],
   };
-  const navigation = workspaceNavigation[role];
+  const navigation = workspaceNavigation[role].filter((item) => !item.capability || account.capabilities?.includes(item.capability));
+  const canWriteRequests = account.capabilities?.includes('request.write');
+  const { data: reference } = useReferenceData();
   const todayLabel = new Intl.DateTimeFormat('en', { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric' }).format(new Date()).toUpperCase();
   const [activePage, setActivePage] = useState('Overview');
   const [requests, setRequests] = useState([]);
@@ -164,6 +207,7 @@ function Workspace({ role, account }) {
   const [responseTarget, setResponseTarget] = useState(null);
   const [comparison, setComparison] = useState(null);
   const [messageThread, setMessageThread] = useState(null);
+  const [reportTarget, setReportTarget] = useState(null);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [notifications, setNotifications] = useState([]);
   const [unreadCount, setUnreadCount] = useState(0);
@@ -287,34 +331,16 @@ function Workspace({ role, account }) {
     }
   }
 
-  async function saveSellerOffer(values) {
-    if (!responseTarget) return;
-    const minorFactor = values.currency === 'JPY' ? 1 : 100;
+  async function saveSellerOffer(payload) {
+    if (!responseTarget) return null;
     try {
-      if (role === 'dmc') {
-        await submitDmcOffer(responseTarget.id, {
-          total_minor: Math.round(Number(values.amount) * minorFactor),
-          currency: values.currency,
-          inclusions: values.inclusions,
-          exclusions: [],
-          validity_until: new Date(Date.now() + 5 * 86400000).toISOString(),
-        });
-      } else if (role === 'hotelier') {
-        await submitHotelOffer(responseTarget.id, {
-          rate_per_night_minor: Math.round(Number(values.amount) * minorFactor),
-          room_type: values.roomType,
-          meal_plan: values.mealPlan,
-          currency: values.currency,
-          inclusions: values.inclusions,
-          exclusions: [],
-          validity_until: new Date(Date.now() + 5 * 86400000).toISOString(),
-        });
-      }
+      await (role === 'dmc' ? submitDmcOffer : submitHotelOffer)(responseTarget.id, payload);
       setResponseTarget(null);
       await syncMarketplace();
       setToast(role === 'hotelier' ? 'Room quote submitted to the requesting agency.' : 'Offer submitted to the requesting agency.');
+      return null;
     } catch (error) {
-      setMarketplaceError(error.message);
+      return error.message;
     }
   }
 
@@ -359,6 +385,7 @@ function Workspace({ role, account }) {
   }
 
   return (
+    <CapabilitiesContext.Provider value={account.capabilities ?? []}>
     <div className="app-shell">
       <aside className="sidebar" aria-label="Main navigation">
         <a className="brand" href="#overview" onClick={() => setActivePage('Overview')} aria-label="Lead Exchange home">
@@ -384,7 +411,7 @@ function Workspace({ role, account }) {
         </nav>
 
         <div className="sidebar-bottom">
-          <div className="region-note"><Globe2 size={15} /><span>Global workspace</span><span className="region-code">Defaults EN / USD</span></div>
+          <div className="region-note"><Globe2 size={15} /><span>Global workspace</span><span className="region-code">Defaults {reference ? `${reference.defaults.country} / ${reference.defaults.currency}` : '...'}</span></div>
           <div className="profile-row">
             <span className="profile-avatar">{details.initials}</span>
             <span className="profile-copy"><strong>{details.name}</strong><small>{details.title}</small></span>
@@ -410,7 +437,7 @@ function Workspace({ role, account }) {
               <h1>{activePage === 'Overview' ? `Good morning, ${details.name.split(' ')[0]}` : activePage}</h1>
               <p className="page-subtitle">{activePage === 'Overview' ? overviewSubtitle(role) : pageSubtitle(activePage, role)}</p>
             </div>
-            {activePage !== 'Security' && <button className="primary-button" onClick={() => role === 'agency' ? setCreateOpen(true) : setActivePage(details.action)}>
+            {!['Security', 'Team', 'Integrations'].includes(activePage) && (role !== 'agency' || canWriteRequests) && <button className="primary-button" onClick={() => role === 'agency' ? setCreateOpen(true) : setActivePage(details.action)}>
               {role === 'agency' ? <Plus size={17} /> : <ArrowUpRight size={16} />}{details.action}
             </button>}
           </div>
@@ -432,37 +459,43 @@ function Workspace({ role, account }) {
           {role === 'agency' && activePage === 'Offers' && <OfferWorkspace offers={offers} onCompare={(offer) => openComparison(requests.find((item) => item.id === offer.requestId))} />}
           {role === 'agency' && activePage === 'Suppliers' && <SupplierWorkspace />}
           {activePage === 'Security' && <MfaSecurityPanel account={account} />}
+          {activePage === 'Security' && <AccountPanel account={account} onDeleted={(result) => navigate('/login', { replace: true, state: { notice: `Account deletion scheduled for ${new Date(result.scheduledFor).toLocaleDateString()}. Sign in before then to cancel.` } })} />}
+          {activePage === 'Team' && <TeamPanel account={account} />}
+          {activePage === 'Integrations' && <IntegrationsPanel />}
+          {activePage === 'Bookings' && <BookingsWorkspace />}
           {role === 'dmc' && activePage === 'Overview' && <DmcOverview requests={requests} offers={offers} sellerProfile={sellerProfile} loading={dataLoading} onOpenRequests={() => setActivePage('Matching requests')} onOpenOffers={() => setActivePage('My offers')} onRespond={setResponseTarget} />}
-          {role === 'dmc' && activePage === 'Matching requests' && <DmcRequestWorkspace requests={requests} sellerProfile={sellerProfile} loading={dataLoading} onRespond={setResponseTarget} onMessage={(request) => setMessageThread({ requestId: request.id, requestCode: request.requestCode, peerName: request.agencyName })} />}
+          {role === 'dmc' && activePage === 'Matching requests' && <DmcRequestWorkspace requests={requests} sellerProfile={sellerProfile} loading={dataLoading} onRespond={setResponseTarget} onReport={(request) => setReportTarget({ type: 'request', id: request.id, label: `request ${request.requestCode}` })} onMessage={(request) => setMessageThread({ requestId: request.id, requestCode: request.requestCode, peerName: request.agencyName })} />}
           {role === 'dmc' && activePage === 'My offers' && <DmcOffers offers={offers} loading={dataLoading} />}
-          {role === 'dmc' && activePage === 'Company profile' && <RoleProfile role="dmc" profile={sellerProfile} organization={details.organization} onSave={saveSellerProfile} />}
+          {role === 'dmc' && activePage === 'Company profile' && <RoleProfile role="dmc" profile={sellerProfile} organization={details.organization} onSave={saveSellerProfile} onDocumentsChanged={syncMarketplace} />}
           {role === 'hotelier' && activePage === 'Overview' && <HotelOverview requests={requests} offers={offers} sellerProfile={sellerProfile} loading={dataLoading} onOpenRequests={() => setActivePage('Booking requests')} onOpenAvailability={() => setActivePage('Availability')} onRespond={setResponseTarget} />}
-          {role === 'hotelier' && activePage === 'Booking requests' && <HotelRequestWorkspace requests={requests} sellerProfile={sellerProfile} loading={dataLoading} onRespond={setResponseTarget} onMessage={(request) => setMessageThread({ requestId: request.id, requestCode: request.requestCode, peerName: request.agencyName })} />}
-          {role === 'hotelier' && activePage === 'Properties' && <RoleProfile role="hotelier" profile={sellerProfile} organization={details.organization} onSave={saveSellerProfile} />}
+          {role === 'hotelier' && activePage === 'Booking requests' && <HotelRequestWorkspace requests={requests} sellerProfile={sellerProfile} loading={dataLoading} onRespond={setResponseTarget} onReport={(request) => setReportTarget({ type: 'request', id: request.id, label: `request ${request.requestCode}` })} onMessage={(request) => setMessageThread({ requestId: request.id, requestCode: request.requestCode, peerName: request.agencyName })} />}
+          {role === 'hotelier' && activePage === 'Properties' && <RoleProfile role="hotelier" profile={sellerProfile} organization={details.organization} onSave={saveSellerProfile} onDocumentsChanged={syncMarketplace} />}
           {role === 'hotelier' && activePage === 'Availability' && <HotelAvailability inventory={inventory} loading={dataLoading} onSave={saveInventory} />}
 
-          <footer className="page-footer"><span>Lead Exchange</span><span>Authenticated workspace</span></footer>
+          <footer className="page-footer"><span>Lead Exchange</span><LegalLinks /></footer>
         </div>
       </main>
 
       {createOpen && <CreateRequestModal draft={draftToPublish} onClose={() => { setCreateOpen(false); setDraftToPublish(null); }} onCreate={saveRequestDraft} onPublish={publishDraft} />}
 
-      {responseTarget && <ResponseModal role={role} target={responseTarget} onClose={() => setResponseTarget(null)} onSubmit={saveSellerOffer} />}
-      {comparison && <OfferComparison request={comparison.request} offers={comparison.offers} onMessage={(offer) => setMessageThread({ requestId: comparison.request.id, requestCode: comparison.request.requestCode, sellerOrganizationId: offer.sellerOrganizationId, peerName: offer.sellerName })} onAward={async (offerId, notSelectedReason) => {
+      {responseTarget && <OfferFormModal role={role} target={responseTarget} roomTypes={[...new Set(inventory.map((item) => item.roomType))]} onClose={() => setResponseTarget(null)} onSubmit={saveSellerOffer} />}
+      {comparison && <OfferComparison request={comparison.request} offers={comparison.offers} onReport={(offer) => setReportTarget({ type: 'offer', id: offer.id, label: `offer from ${offer.sellerName}` })} onMessage={(offer) => setMessageThread({ requestId: comparison.request.id, requestCode: comparison.request.requestCode, sellerOrganizationId: offer.sellerOrganizationId, peerName: offer.sellerName })} onAward={async (offerId, notSelectedReason) => {
         try {
           await awardMarketplaceOffer(comparison.request.id, offerId, notSelectedReason);
           setComparison(null);
           await syncMarketplace();
-          setToast('Offer awarded. Booking confirmation is still required before guest details can be shared.');
+          setToast('Offer awarded. Confirm the booking under Bookings to share guest details with the seller.');
         } catch (error) {
           setMarketplaceError(error.message);
         }
       }} onClose={() => setComparison(null)} />}
-      {messageThread && <MessageThreadModal {...messageThread} onClose={() => setMessageThread(null)} />}
+      {messageThread && <MessageThreadModal {...messageThread} onReport={(message) => setReportTarget({ type: 'message', id: message.id, label: `message from ${message.senderName}` })} onClose={() => setMessageThread(null)} />}
+      {reportTarget && <ReportDialog target={reportTarget} onClose={() => setReportTarget(null)} onReported={() => setToast('Report sent to platform operations.')} />}
       {notificationsOpen && <NotificationPopover notifications={notifications} unreadCount={unreadCount} loading={notificationsLoading} onClose={() => setNotificationsOpen(false)} onRead={readNotification} onReadAll={readAllNotifications} />}
 
       {toast && <div className="toast" role="status"><Check size={16} />{toast}</div>}
     </div>
+    </CapabilitiesContext.Provider>
   );
 }
 
@@ -472,49 +505,7 @@ function overviewSubtitle(role) {
   return 'Your marketplace at a glance.';
 }
 
-function ResponseModal({ role, target, onClose, onSubmit }) {
-  const isHotel = role === 'hotelier';
-  return (
-    <div className="modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
-      <section className="modal" role="dialog" aria-modal="true" aria-labelledby="response-modal-title">
-        <div className="modal-heading">
-          <div><p className="eyebrow">{isHotel ? 'HOTEL RESPONSE' : 'DMC OFFER'}</p><h2 id="response-modal-title">{isHotel ? 'Respond to room request' : 'Prepare an offer'}</h2></div>
-          <button className="icon-button" aria-label="Close dialog" onClick={onClose}><X size={18} /></button>
-        </div>
-        <p className="modal-copy"><strong>{target.destination}</strong> / {target.requestCode}. This offer is visible only to the requesting agency.</p>
-        <form onSubmit={(event) => {
-          event.preventDefault();
-          const form = new FormData(event.currentTarget);
-          onSubmit({
-            amount: form.get('amount'),
-            currency: form.get('currency'),
-            inclusions: form.getAll('inclusions'),
-            roomType: form.get('room_type'),
-            mealPlan: form.get('meal_plan'),
-          });
-        }}>
-          <label className="field-label" htmlFor="response-amount">{isHotel ? 'Rate per room, per night' : 'Total package price'}</label>
-          <div className="response-fields">
-            <select name="currency" aria-label="Currency" defaultValue="USD"><option>USD</option><option>EUR</option><option>JPY</option></select>
-            <input id="response-amount" name="amount" type="number" min="1" step="0.01" placeholder="0.00" required />
-          </div>
-          {!isHotel && <fieldset className="inclusion-picker"><legend>Included in your offer</legend>{['accommodation', 'breakfast', 'transfers', 'sightseeing', 'guide', 'taxes', 'rail'].map((item) => <label key={item}><input type="checkbox" name="inclusions" value={item} />{item}</label>)}</fieldset>}
-          {isHotel && <><label className="field-label response-extra" htmlFor="room-type">Room type<select id="room-type" name="room_type" required defaultValue=""><option value="" disabled>Select a room type</option><option>Deluxe Twin</option><option>Garden Suite</option><option>Family Room</option></select></label><label className="field-label response-extra" htmlFor="hotel-meal-plan">Meal plan<select id="hotel-meal-plan" name="meal_plan" defaultValue="breakfast"><option value="room_only">Room only</option><option value="breakfast">Breakfast</option><option value="half_board">Half board</option><option value="full_board">Full board</option><option value="all_inclusive">All inclusive</option></select></label></>}
-          <div className="modal-actions"><button type="button" className="secondary-button" onClick={onClose}>Cancel</button><button type="submit" className="primary-button">{isHotel ? 'Submit room quote' : 'Submit offer'}</button></div>
-        </form>
-      </section>
-    </div>
-  );
-}
-
-const visibilityLabels = {
-  open: 'Open to all matching verified sellers',
-  invite_only: 'Invited suppliers only',
-  open_and_invite: 'Matching sellers and invited suppliers',
-};
-const maxInvitedSuppliers = 20;
-
-function SupplierInvitePicker({ selected, onChange }) {
+function SupplierInvitePicker({ selected, onChange, maxInvited }) {
   const [search, setSearch] = useState('');
   const [results, setResults] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -535,19 +526,19 @@ function SupplierInvitePicker({ selected, onChange }) {
   const selectedIds = new Set(selected.map((supplier) => supplier.organizationId));
   function toggle(supplier) {
     if (selectedIds.has(supplier.organizationId)) onChange(selected.filter((item) => item.organizationId !== supplier.organizationId));
-    else if (selected.length < maxInvitedSuppliers) onChange([...selected, { organizationId: supplier.organizationId, name: supplier.name, type: supplier.type }]);
+    else if (selected.length < maxInvited) onChange([...selected, { organizationId: supplier.organizationId, name: supplier.name, type: supplier.type }]);
   }
 
   return (
     <fieldset className="invite-picker">
-      <legend>Invite verified suppliers ({selected.length}/{maxInvitedSuppliers})</legend>
+      <legend>Invite verified suppliers ({selected.length}/{maxInvited})</legend>
       {selected.length > 0 && <div className="invite-chips">{selected.map((supplier) => <button type="button" key={supplier.organizationId} className="invite-chip" onClick={() => toggle(supplier)} aria-label={`Remove ${supplier.name}`}>{supplier.name}<X size={12} /></button>)}</div>}
       <label className="search-field"><Search size={16} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search company or destination" aria-label="Search suppliers to invite" /></label>
       {error && <p className="auth-error" role="alert">{error}</p>}
       <div className="invite-results">
         {loading ? <small className="table-secondary">Searching verified suppliers...</small> : results.length ? results.map((supplier) => (
           <label key={supplier.organizationId} className="invite-result">
-            <input type="checkbox" checked={selectedIds.has(supplier.organizationId)} disabled={!selectedIds.has(supplier.organizationId) && selected.length >= maxInvitedSuppliers} onChange={() => toggle(supplier)} />
+            <input type="checkbox" checked={selectedIds.has(supplier.organizationId)} disabled={!selectedIds.has(supplier.organizationId) && selected.length >= maxInvited} onChange={() => toggle(supplier)} />
             <span><strong>{supplier.name}</strong><small>{supplier.type === 'hotelier' ? `Hotel / ${supplier.propertyCity ?? supplier.countryCode}` : `DMC / ${supplier.coverageDestinations.join(', ')}`}</small></span>
           </label>
         )) : <small className="table-secondary">No verified suppliers match this search.</small>}
@@ -557,17 +548,26 @@ function SupplierInvitePicker({ selected, onChange }) {
 }
 
 function CreateRequestModal({ draft, onClose, onCreate, onPublish }) {
+  const { data: reference, error: referenceError } = useReferenceData();
   const [dateMode, setDateMode] = useState('exact');
   const [formError, setFormError] = useState('');
   const [saving, setSaving] = useState(false);
   const [visibility, setVisibility] = useState('open');
   const [invitedSuppliers, setInvitedSuppliers] = useState([]);
+  const [destination, setDestination] = useState([]);
+  const now = new Date();
+  const deadlineLimits = reference?.limits.requestDeadline;
+  const deadlineInputFormat = "yyyy-MM-dd'T'HH:mm";
 
   async function submitDraft(event) {
     event.preventDefault();
     setFormError('');
     const form = new FormData(event.currentTarget);
     const services = form.getAll('services');
+    if (!destination.length) {
+      setFormError('Choose a destination from the list.');
+      return;
+    }
     if (services.length === 0) {
       setFormError('Select at least one requested service.');
       return;
@@ -579,18 +579,18 @@ function CreateRequestModal({ draft, onClose, onCreate, onPublish }) {
     const startDate = form.get('travelStartDate');
     const endDate = form.get('travelEndDate');
     const nights = dateMode === 'exact'
-      ? Math.round((Date.parse(`${endDate}T00:00:00Z`) - Date.parse(`${startDate}T00:00:00Z`)) / 86400000)
+      ? differenceInCalendarDays(parseISO(endDate), parseISO(startDate))
       : Number(form.get('nights'));
     const budgetMin = form.get('budgetMin');
     const budgetMax = form.get('budgetMax');
+    const budgetCurrency = form.get('budgetCurrency');
     if ((budgetMin && !budgetMax) || (!budgetMin && budgetMax)) {
       setFormError('Enter both budget limits or leave the budget blank.');
       return;
     }
 
     const fields = {
-      destination: form.get('destination'),
-      destination_country: form.get('destinationCountry'),
+      destination_id: destination[0].id,
       travel_start_date: dateMode === 'exact' ? startDate : null,
       travel_end_date: dateMode === 'exact' ? endDate : null,
       travel_month: dateMode === 'month' ? form.get('travelMonth') : null,
@@ -603,10 +603,10 @@ function CreateRequestModal({ draft, onClose, onCreate, onPublish }) {
       room_count: form.get('roomCount') ? Number(form.get('roomCount')) : null,
       meal_plan: form.get('mealPlan') || null,
       services,
-      budget_min_minor: budgetMin && budgetMax ? Math.round(Number(budgetMin) * 100) : null,
-      budget_max_minor: budgetMin && budgetMax ? Math.round(Number(budgetMax) * 100) : null,
-      budget_currency: budgetMin && budgetMax ? 'USD' : null,
-      response_deadline: new Date(Date.now() + 72 * 60 * 60 * 1000).toISOString(),
+      budget_min_minor: budgetMin && budgetMax ? toMinorUnits(budgetMin, budgetCurrency) : null,
+      budget_max_minor: budgetMin && budgetMax ? toMinorUnits(budgetMax, budgetCurrency) : null,
+      budget_currency: budgetMin && budgetMax ? budgetCurrency : null,
+      response_deadline: new Date(form.get('responseDeadline')).toISOString(),
       visibility,
       invited_seller_ids: visibility === 'open' ? [] : invitedSuppliers.map((supplier) => supplier.organizationId),
     };
@@ -626,21 +626,19 @@ function CreateRequestModal({ draft, onClose, onCreate, onPublish }) {
         {draft ? (
           <>
             <p className="modal-copy">This allowlisted snapshot is what matched sellers will receive. No traveler names, contacts, or internal notes are included.</p>
-            <dl className="request-preview-list"><div><dt>Destination</dt><dd>{draft.destination}, {draft.destinationCountry}</dd></div><div><dt>Travel</dt><dd>{draft.dates} / {draft.nights} nights</dd></div><div><dt>Travelers</dt><dd>{draft.travelers}</dd></div><div><dt>Services</dt><dd>{draft.services.join(', ')}</dd></div><div><dt>Response deadline</dt><dd>{new Date(draft.responseDeadline).toLocaleString()}</dd></div><div><dt>Visibility</dt><dd>{visibilityLabels[draft.visibility] ?? visibilityLabels.open}</dd></div>{draft.invitedSellers?.length > 0 && <div><dt>Invited suppliers</dt><dd>{draft.invitedSellers.map((seller) => seller.name).join(', ')}</dd></div>}</dl>
+            <dl className="request-preview-list"><div><dt>Destination</dt><dd>{draft.destination}, {draft.destinationCountry}</dd></div><div><dt>Travel</dt><dd>{draft.dates} / {draft.nights} nights</dd></div><div><dt>Travelers</dt><dd>{draft.travelers}</dd></div><div><dt>Services</dt><dd>{draft.services.map((service) => labelFor(reference?.services, service)).join(', ')}</dd></div><div><dt>Response deadline</dt><dd>{new Date(draft.responseDeadline).toLocaleString()}</dd></div><div><dt>Visibility</dt><dd>{labelFor(reference?.requestVisibilities, draft.visibility)}</dd></div>{draft.invitedSellers?.length > 0 && <div><dt>Invited suppliers</dt><dd>{draft.invitedSellers.map((seller) => seller.name).join(', ')}</dd></div>}</dl>
             <div className="modal-actions"><button type="button" className="secondary-button" onClick={onClose}>Keep draft</button><button type="button" className="primary-button" onClick={onPublish}>Publish request</button></div>
           </>
-        ) : (
+        ) : !reference ? <div className="empty-state">{referenceError || 'Loading request options...'}</div> : (
           <form className="request-form" onSubmit={submitDraft}>
-            <label className="field-label" htmlFor="destination">Destination</label>
-            <div className="input-with-icon"><MapPin size={16} /><input id="destination" name="destination" placeholder="City or region" required minLength={2} maxLength={120} /></div>
-            <label className="field-label" htmlFor="destination-country">Country</label>
-            <select id="destination-country" name="destinationCountry" className="form-select" required defaultValue=""><option value="" disabled>Select country</option><option value="IN">India</option><option value="AE">United Arab Emirates</option><option value="GB">United Kingdom</option><option value="US">United States</option><option value="JP">Japan</option><option value="PT">Portugal</option><option value="MA">Morocco</option><option value="ZA">South Africa</option></select>
-            <div className="request-form-grid"><label className="field-label">Date mode<select className="form-select" value={dateMode} onChange={(event) => setDateMode(event.target.value)}><option value="exact">Exact dates</option><option value="month">Month and nights</option></select></label>{dateMode === 'exact' ? <><label className="field-label">Arrival<input className="form-input" name="travelStartDate" type="date" required /></label><label className="field-label">Departure<input className="form-input" name="travelEndDate" type="date" required /></label></> : <><label className="field-label">Travel month<input className="form-input" name="travelMonth" type="month" required /></label><label className="field-label">Nights<input className="form-input" name="nights" type="number" min="1" max="90" required /></label></>}
-              <label className="field-label">Adults<input className="form-input" name="adults" type="number" min="1" max="100" defaultValue="2" required /></label><label className="field-label">Children<input className="form-input" name="children" type="number" min="0" max="80" defaultValue="0" /></label><label className="field-label">Infants<input className="form-input" name="infants" type="number" min="0" max="40" defaultValue="0" /></label><label className="field-label">Group type<select className="form-select" name="groupType"><option value="family">Family</option><option value="honeymoon">Honeymoon</option><option value="friends">Friends</option><option value="corporate">Corporate / MICE</option><option value="school">School</option><option value="seniors">Seniors</option><option value="solo">Solo</option><option value="other">Other</option></select></label><label className="field-label">Hotel category<select className="form-select" name="hotelCategory"><option value="">Any</option><option value="3">3 star</option><option value="4">4 star</option><option value="5">5 star</option></select></label><label className="field-label">Rooms<input className="form-input" name="roomCount" type="number" min="1" max="50" defaultValue="1" /></label><label className="field-label">Meal plan<select className="form-select" name="mealPlan"><option value="">Any</option><option value="room_only">Room only</option><option value="breakfast">Breakfast</option><option value="half_board">Half board</option><option value="full_board">Full board</option><option value="all_inclusive">All inclusive</option></select></label></div>
-            <fieldset className="service-picker"><legend>Services requested</legend>{['hotel', 'transfers', 'sightseeing', 'guide', 'visa', 'flights'].map((service) => <label key={service}><input type="checkbox" name="services" value={service} />{service}</label>)}</fieldset>
-            <p className="field-label budget-title">Optional budget range (USD)</p><div className="request-form-grid budget-grid"><input className="form-input" name="budgetMin" type="number" min="0" step="1" placeholder="Minimum" /><input className="form-input" name="budgetMax" type="number" min="0" step="1" placeholder="Maximum" /></div>
-            <label className="field-label">Who can see this request<select className="form-select" value={visibility} onChange={(event) => setVisibility(event.target.value)}><option value="open">{visibilityLabels.open}</option><option value="invite_only">{visibilityLabels.invite_only}</option><option value="open_and_invite">{visibilityLabels.open_and_invite}</option></select></label>
-            {visibility !== 'open' && <SupplierInvitePicker selected={invitedSuppliers} onChange={setInvitedSuppliers} />}
+            <DestinationPicker label="Destination" value={destination} onChange={setDestination} placeholder="Search city, region or country" />
+            <div className="request-form-grid"><label className="field-label">Date mode<select className="form-select" value={dateMode} onChange={(event) => setDateMode(event.target.value)}><option value="exact">Exact dates</option><option value="month">Month and nights</option></select></label>{dateMode === 'exact' ? <><label className="field-label">Arrival<input className="form-input" name="travelStartDate" type="date" min={format(now, 'yyyy-MM-dd')} required /></label><label className="field-label">Departure<input className="form-input" name="travelEndDate" type="date" min={format(now, 'yyyy-MM-dd')} required /></label></> : <><label className="field-label">Travel month<input className="form-input" name="travelMonth" type="month" min={format(now, 'yyyy-MM')} required /></label><label className="field-label">Nights<input className="form-input" name="nights" type="number" min="1" max="90" required /></label></>}
+              <label className="field-label">Adults<input className="form-input" name="adults" type="number" min="1" max="100" defaultValue="2" required /></label><label className="field-label">Children<input className="form-input" name="children" type="number" min="0" max="80" defaultValue="0" /></label><label className="field-label">Infants<input className="form-input" name="infants" type="number" min="0" max="40" defaultValue="0" /></label><label className="field-label">Group type<select className="form-select" name="groupType">{reference.groupTypes.map((type) => <option key={type.value} value={type.value}>{type.label}</option>)}</select></label><label className="field-label">Hotel category<select className="form-select" name="hotelCategory"><option value="">Any</option>{reference.hotelCategories.map((category) => <option key={category.value} value={category.value}>{category.label}</option>)}</select></label><label className="field-label">Rooms<input className="form-input" name="roomCount" type="number" min="1" max="50" defaultValue="1" /></label><label className="field-label">Meal plan<select className="form-select" name="mealPlan"><option value="">Any</option>{reference.mealPlans.map((plan) => <option key={plan.value} value={plan.value}>{plan.label}</option>)}</select></label></div>
+            <fieldset className="service-picker"><legend>Services requested</legend>{reference.services.map((service) => <label key={service.value}><input type="checkbox" name="services" value={service.value} />{service.label}</label>)}</fieldset>
+            <p className="field-label budget-title">Optional budget range</p><div className="request-form-grid budget-grid"><select className="form-select" name="budgetCurrency" aria-label="Budget currency" defaultValue={reference.defaults.currency}>{reference.currencies.map((code) => <option key={code} value={code}>{code}</option>)}</select><input className="form-input" name="budgetMin" type="number" min="0" step="any" placeholder="Minimum" /><input className="form-input" name="budgetMax" type="number" min="0" step="any" placeholder="Maximum" /></div>
+            <label className="field-label">Response deadline<input className="form-input" name="responseDeadline" type="datetime-local" required min={format(addHours(now, deadlineLimits.minHours), deadlineInputFormat)} max={format(addDays(now, deadlineLimits.maxDays), deadlineInputFormat)} defaultValue={format(addHours(now, deadlineLimits.defaultHours), deadlineInputFormat)} /></label>
+            <label className="field-label">Who can see this request<select className="form-select" value={visibility} onChange={(event) => setVisibility(event.target.value)}>{reference.requestVisibilities.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
+            {visibility !== 'open' && <SupplierInvitePicker selected={invitedSuppliers} onChange={setInvitedSuppliers} maxInvited={reference.limits.maxInvitedSuppliers} />}
             {formError && <p className="auth-error" role="alert">{formError}</p>}
             <div className="modal-actions"><button type="button" className="secondary-button" onClick={onClose}>Cancel</button><button type="submit" className="primary-button" disabled={saving}>{saving ? 'Saving...' : 'Save draft and preview'}</button></div>
           </form>
@@ -650,11 +648,14 @@ function CreateRequestModal({ draft, onClose, onCreate, onPublish }) {
   );
 }
 
-function OfferComparison({ request, offers, onAward, onMessage, onClose }) {
+function OfferComparison({ request, offers, onAward, onMessage, onReport, onClose }) {
+  const { data: reference } = useReferenceData();
   const [awardTarget, setAwardTarget] = useState(null);
   const [notSelectedReason, setNotSelectedReason] = useState('');
   const [awarding, setAwarding] = useState(false);
-  const canAward = ['open', 'closed'].includes(request.status);
+  const canAwardRole = useCan('request.award');
+  const canAward = ['open', 'closed'].includes(request.status) && canAwardRole;
+  const canMessage = useCan('message.write');
 
   async function confirmAward() {
     setAwarding(true);
@@ -674,14 +675,14 @@ function OfferComparison({ request, offers, onAward, onMessage, onClose }) {
             <small className="table-secondary">Do not include contact details or links. {300 - notSelectedReason.length} characters left.</small>
             <div className="modal-actions"><button type="button" className="secondary-button" onClick={() => setAwardTarget(null)} disabled={awarding}>Back</button><button type="button" className="primary-button" onClick={confirmAward} disabled={awarding}>{awarding ? 'Awarding...' : 'Confirm award'}</button></div>
           </div>
-        ) : offers.length ? <div className="comparison-list">{offers.map((offer) => <article className="comparison-offer" key={offer.id}><div><strong>{offer.sellerName}</strong><small>{offer.currency} / total · valid through {new Date(offer.validityUntil).toLocaleDateString()}</small><span>{offer.inclusions.join(', ')}</span></div><strong className="comparison-price">{formatOfferPrice(offer)}</strong><div className="comparison-actions"><button className="secondary-button" onClick={() => onMessage(offer)}><MessageSquareText size={14} />Message</button>{canAward && ['submitted', 'shortlisted'].includes(offer.status) && <button className="primary-button" onClick={() => setAwardTarget(offer)}>Award offer</button>}</div></article>)}</div> : <div className="empty-state"><MessageSquareText size={22} /><strong>No verified offers yet</strong><span>Offers from verified sellers will appear here.</span></div>}
+        ) : offers.length ? <div className="comparison-list">{offers.map((offer) => <article className="comparison-offer" key={offer.id}><div><strong>{offer.sellerName}</strong><small>{offer.kind === 'hotel_room' ? `${offer.roomType} / ${offer.roomCount ?? 1} room(s)` : 'Land package'} · valid through {new Date(offer.validityUntil).toLocaleDateString()}</small><span>{offer.inclusions.map((item) => labelFor(reference?.offerInclusions, item)).join(', ')}</span><OfferDetails offer={offer} /></div><div className="comparison-price-block"><strong className="comparison-price">{formatOfferPrice(offer)}</strong>{offer.kind === 'hotel_room' && offer.estimatedTotalMinor != null && <small>Est. stay {formatMinor(offer.estimatedTotalMinor, offer.currency)}</small>}{offer.perTravellerMinor != null && <small>{formatMinor(offer.perTravellerMinor, offer.currency)} per traveller ({offer.travellers})</small>}</div><div className="comparison-actions">{canMessage && <button className="secondary-button" onClick={() => onMessage(offer)}><MessageSquareText size={14} />Message</button>}{canAward && ['submitted', 'shortlisted'].includes(offer.status) && <button className="primary-button" onClick={() => setAwardTarget(offer)}>Award offer</button>}<button className="text-button report-link" onClick={() => onReport(offer)}><Flag size={13} />Report</button></div></article>)}</div> : <div className="empty-state"><MessageSquareText size={22} /><strong>No verified offers yet</strong><span>Offers from verified sellers will appear here.</span></div>}
         <p className="privacy-note">Awarding does not confirm a booking or release guest details.</p>
       </section>
     </div>
   );
 }
 
-function MessageThreadModal({ requestId, requestCode, sellerOrganizationId = '', peerName, onClose }) {
+function MessageThreadModal({ requestId, requestCode, sellerOrganizationId = '', peerName, onReport, onClose }) {
   const [messages, setMessages] = useState([]);
   const [message, setMessage] = useState('');
   const [loading, setLoading] = useState(true);
@@ -719,7 +720,7 @@ function MessageThreadModal({ requestId, requestCode, sellerOrganizationId = '',
       <section className="modal message-modal" role="dialog" aria-modal="true" aria-labelledby="message-thread-title">
         <div className="modal-heading"><div><p className="eyebrow">REQUEST {requestCode}</p><h2 id="message-thread-title">Conversation with {peerName}</h2></div><button className="icon-button" aria-label="Close conversation" onClick={onClose}><X size={18} /></button></div>
         <div className="message-thread" aria-live="polite">
-          {loading ? <div className="empty-state">Loading conversation...</div> : messages.length ? messages.map((item) => <article className={`message-bubble ${item.isMine ? 'mine' : ''}`} key={item.id}><strong>{item.isMine ? 'You' : item.senderName}</strong><p>{item.body}</p><time>{new Date(item.createdAt).toLocaleString()}</time></article>) : <div className="empty-state"><MessageSquareText size={22} /><strong>No messages yet</strong><span>Ask a question about this request or offer.</span></div>}
+          {loading ? <div className="empty-state">Loading conversation...</div> : messages.length ? messages.map((item) => <article className={`message-bubble ${item.isMine ? 'mine' : ''}`} key={item.id}><strong>{item.isMine ? 'You' : item.senderName}</strong><p>{item.body}</p><time>{new Date(item.createdAt).toLocaleString()}</time>{!item.isMine && onReport && <button className="text-button report-link" onClick={() => onReport(item)}><Flag size={12} />Report</button>}</article>) : <div className="empty-state"><MessageSquareText size={22} /><strong>No messages yet</strong><span>Ask a question about this request or offer.</span></div>}
         </div>
         <form className="message-compose" onSubmit={submit}>
           <label className="visually-hidden" htmlFor="marketplace-message">Message</label>
@@ -732,15 +733,10 @@ function MessageThreadModal({ requestId, requestCode, sellerOrganizationId = '',
   );
 }
 
-function formatMinorAmount(amount, currency) {
-  const factor = currency === 'JPY' ? 1 : 100;
-  return new Intl.NumberFormat(undefined, { style: 'currency', currency, maximumFractionDigits: currency === 'JPY' ? 0 : 2 }).format(Number(amount) / factor);
-}
-
 function formatOfferPrice(offer) {
   return offer.kind === 'hotel_room'
-    ? `${formatMinorAmount(offer.ratePerNightMinor, offer.currency)} / room / night`
-    : formatMinorAmount(offer.totalMinor, offer.currency);
+    ? `${formatMinor(offer.ratePerNightMinor, offer.currency)} / room / night`
+    : formatMinor(offer.totalMinor, offer.currency);
 }
 
 function NotificationPopover({ notifications, unreadCount, loading, onClose, onRead, onReadAll }) {
@@ -757,6 +753,10 @@ function NotificationPopover({ notifications, unreadCount, loading, onClose, onR
 
 function pageSubtitle(page, role) {
   if (page === 'Security') return 'Manage authenticator sign-in and recovery codes.';
+  if (page === 'Integrations') return 'Send marketplace events to your CRM as signed webhooks.';
+  if (page === 'Bookings') return role === 'agency'
+    ? 'Confirm awarded offers, share guest details and track seller confirmations.'
+    : 'Won bookings, guest details shared by the agency and your confirmations.';
   if (role === 'dmc') {
     if (page === 'Matching requests') return 'Destination opportunities matched to your coverage.';
     if (page === 'My offers') return 'Track your submitted prices and response status.';
