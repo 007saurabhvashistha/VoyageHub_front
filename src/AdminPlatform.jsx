@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import Markdown from 'react-markdown';
-import { DatabaseBackup, Eye, FileText, MapPin, Plus, RefreshCw, Search, SlidersHorizontal } from 'lucide-react';
-import { createAdminDestination, getOperationsStatus, getPlatformSettings, listAdminDestinations, listAdminLegalDocuments, publishLegalDocument, updateAdminDestination, updatePlatformSetting } from './api.js';
+import { DatabaseBackup, Eye, FileText, Hotel, MapPin, Plus, RefreshCw, Search, SlidersHorizontal, Star, Upload } from 'lucide-react';
+import { createAdminDestination, decideHotelProperty, getAdminDestination, getDestinationLevels, getOperationsStatus, getPlatformSettings, importFeaturedDestinations, listAdminDestinations, listAdminLegalDocuments, listPendingHotelProperties, publishLegalDocument, saveDestinationLevels, updateAdminDestination, updatePlatformSetting } from './api.js';
 import { DestinationPicker } from './DestinationPicker.jsx';
 import { labelFor, useReferenceData } from './referenceData.js';
 
@@ -18,10 +18,15 @@ export function AdminSettings() {
 
   function apply(result) {
     setSettings(result.settings);
-    setInputs(Object.fromEntries(result.settings.map((setting) => [setting.key, String(setting.value)])));
+    setInputs(Object.fromEntries(result.settings.map((setting) => [setting.key, setting.type === 'list' ? setting.value.join(', ') : String(setting.value)])));
   }
 
   useEffect(() => { getPlatformSettings().then(apply).catch((requestError) => setError(requestError.message)); }, []);
+
+  const parsed = (setting) => setting.type === 'list'
+    ? (inputs[setting.key] ?? '').split(',').map((item) => item.trim()).filter(Boolean)
+    : Number(inputs[setting.key]);
+  const unchanged = (setting) => JSON.stringify(parsed(setting)) === JSON.stringify(setting.value);
 
   async function save(event, setting) {
     event.preventDefault();
@@ -29,7 +34,7 @@ export function AdminSettings() {
     setError('');
     setNotice('');
     try {
-      apply(await updatePlatformSetting(setting.key, Number(inputs[setting.key])));
+      apply(await updatePlatformSetting(setting.key, parsed(setting)));
       setNotice(`${setting.label} saved.`);
     } catch (requestError) {
       setError(requestError.message);
@@ -46,10 +51,12 @@ export function AdminSettings() {
       <section className="surface-section admin-queue admin-settings-panel">
         {settings.length ? settings.map((setting) => (
           <form className="admin-setting-form" key={setting.key} onSubmit={(event) => save(event, setting)}>
-            <label className="field-label" htmlFor={`setting-${setting.key}`}><SlidersHorizontal size={14} />{setting.label} ({setting.unit})</label>
-            <input id={`setting-${setting.key}`} className="form-input" type="number" min={setting.min} max={setting.max} step="1" value={inputs[setting.key] ?? ''} onChange={(event) => setInputs((current) => ({ ...current, [setting.key]: event.target.value }))} required />
-            <button className="primary-button" disabled={saving === setting.key || Number(inputs[setting.key]) === setting.value}>{saving === setting.key ? 'Saving...' : 'Save'}</button>
-            <small>{setting.description} Current {setting.value}{setting.updatedAt ? ` / updated ${new Date(setting.updatedAt).toLocaleString()}` : ` / default ${setting.defaultValue}`}</small>
+            <label className="field-label" htmlFor={`setting-${setting.key}`}><SlidersHorizontal size={14} />{setting.label}{setting.unit ? ` (${setting.unit})` : ''}</label>
+            {setting.type === 'list'
+              ? <input id={`setting-${setting.key}`} className="form-input" value={inputs[setting.key] ?? ''} onChange={(event) => setInputs((current) => ({ ...current, [setting.key]: event.target.value }))} placeholder={setting.options ? setting.options.join(', ') : 'Comma separated'} />
+              : <input id={`setting-${setting.key}`} className="form-input" type="number" min={setting.min} max={setting.max} step="1" value={inputs[setting.key] ?? ''} onChange={(event) => setInputs((current) => ({ ...current, [setting.key]: event.target.value }))} required />}
+            <button className="primary-button" disabled={saving === setting.key || unchanged(setting)}>{saving === setting.key ? 'Saving...' : 'Save'}</button>
+            <small>{setting.description}{setting.options ? ` Allowed: ${setting.options.join(', ')}.` : ''} Current {setting.type === 'list' ? setting.value.join(', ') || 'none' : setting.value}{setting.updatedAt ? ` / updated ${new Date(setting.updatedAt).toLocaleString()}` : ` / default ${setting.type === 'list' ? setting.defaultValue.join(', ') || 'none' : setting.defaultValue}`}</small>
           </form>
         )) : <div className="empty-state">Loading platform settings...</div>}
       </section>
@@ -103,10 +110,12 @@ export function AdminDestinations() {
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const [featuredOnly, setFeaturedOnly] = useState(false);
+  const [parentsEditor, setParentsEditor] = useState(null);
 
   async function refresh(search = query) {
     try {
-      setList(await listAdminDestinations({ q: search.trim() }));
+      setList(await listAdminDestinations({ q: search.trim(), featured: featuredOnly }));
     } catch (requestError) {
       setError(requestError.message);
     }
@@ -115,7 +124,7 @@ export function AdminDestinations() {
   useEffect(() => {
     const timeout = window.setTimeout(() => refresh(query), 250);
     return () => window.clearTimeout(timeout);
-  }, [query]);
+  }, [query, featuredOnly]);
 
   async function create(event) {
     event.preventDefault();
@@ -141,11 +150,11 @@ export function AdminDestinations() {
     }
   }
 
-  async function toggle(destination) {
+  async function toggle(destination, field = 'active') {
     setBusy(destination.id);
     setError('');
     try {
-      await updateAdminDestination(destination.id, { active: !destination.active });
+      await updateAdminDestination(destination.id, { [field]: !destination[field] });
       await refresh();
     } catch (requestError) {
       setError(requestError.message);
@@ -154,10 +163,34 @@ export function AdminDestinations() {
     }
   }
 
-  const parentKinds = form.kind === 'region' ? ['country'] : ['country', 'region'];
+  async function openParents(destination) {
+    setError('');
+    try {
+      const detail = await getAdminDestination(destination.id);
+      setParentsEditor({ destination, parents: detail.destination.secondaryParents });
+    } catch (requestError) {
+      setError(requestError.message);
+    }
+  }
+
+  async function saveParents() {
+    setBusy(parentsEditor.destination.id);
+    setError('');
+    try {
+      await updateAdminDestination(parentsEditor.destination.id, { secondary_parent_ids: parentsEditor.parents.map((parent) => parent.id) });
+      setNotice(`Extra parents saved for ${parentsEditor.destination.name}.`);
+      setParentsEditor(null);
+    } catch (requestError) {
+      setError(requestError.message);
+    } finally {
+      setBusy('');
+    }
+  }
+
+  const parentKinds = reference?.destinationParentKinds?.[form.kind] ?? [];
   return (
     <>
-      <SectionHeading eyebrow="MASTER DATA" title="Destinations" subtitle={`Countries, regions and cities used for requests, coverage and matching.${list.totals ? ` ${list.totals.active} active of ${list.totals.all}.` : ''} Bulk import: npm run destinations:import.`} />
+      <SectionHeading eyebrow="MASTER DATA" title="Destinations" subtitle={`Countries, level 1 and level 2 areas and places used for leads, coverage and matching.${list.totals ? ` ${list.totals.active} active of ${list.totals.all}.` : ''} Bulk import: npm run destinations:import (countries from the Destination countries setting).`} />
       {error && <div className="auth-error" role="alert">{error}</div>}
       {notice && <p className="team-notice" role="status">{notice}</p>}
       <section className="surface-section admin-queue">
@@ -167,19 +200,168 @@ export function AdminDestinations() {
             ? <label className="field-label">Country<select className="form-select" value={form.countryCode} onChange={(event) => setForm({ ...form, countryCode: event.target.value })} required><option value="" disabled>Select country</option>{(reference?.countries ?? []).map((country) => <option key={country.code} value={country.code}>{country.name}</option>)}</select></label>
             : <>
               <label className="field-label">Name<input className="form-input" value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} minLength="2" maxLength="120" required /></label>
-              <DestinationPicker label="Parent (country or region)" value={form.parent} onChange={(parent) => setForm({ ...form, parent })} kinds={parentKinds} />
-              <label className="field-label">Other names (comma separated)<input className="form-input" value={form.aliases} onChange={(event) => setForm({ ...form, aliases: event.target.value })} placeholder="e.g. Bombay" /></label>
+              <DestinationPicker label={`Parent (${parentKinds.map((kind) => labelFor(reference?.destinationKinds, kind).toLowerCase()).join(' or ')})`} value={form.parent} onChange={(parent) => setForm({ ...form, parent })} kinds={parentKinds} />
+              <label className="field-label">Other names (comma separated)<input className="form-input" value={form.aliases} onChange={(event) => setForm({ ...form, aliases: event.target.value })} placeholder="Old names, short names, local spellings" /></label>
             </>}
           <button className="primary-button" disabled={busy === 'create' || (form.kind !== 'country' && !form.parent.length)}><Plus size={15} />Add destination</button>
         </form>
         <label className="search-field moderation-search"><Search size={16} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search destinations, including inactive" aria-label="Search destinations" /></label>
+        <label className="checkbox-field"><input type="checkbox" checked={featuredOnly} onChange={(event) => setFeaturedOnly(event.target.checked)} />Featured only</label>
+        {parentsEditor && <div className="negotiation-notice">
+          <p><strong>{parentsEditor.destination.label}</strong> also belongs to (for places that span several areas):</p>
+          <DestinationPicker label="Extra parents" value={parentsEditor.parents} onChange={(parents) => setParentsEditor({ ...parentsEditor, parents })} multiple max={10} kinds={reference?.destinationParentKinds?.[parentsEditor.destination.kind] ?? []} />
+          <div className="modal-actions"><button className="secondary-button" onClick={() => setParentsEditor(null)}>Cancel</button><button className="primary-button" disabled={busy === parentsEditor.destination.id} onClick={saveParents}>Save extra parents</button></div>
+        </div>}
         {list.destinations.length ? list.destinations.map((destination) => (
           <article className="outbox-entry" key={destination.id}>
-            <div className="outbox-entry-main"><strong><MapPin size={13} /> {destination.label}</strong><span>{labelFor(reference?.destinationKinds, destination.kind)}{destination.aliases.length ? ` / also: ${destination.aliases.join(', ')}` : ''}</span></div>
+            <div className="outbox-entry-main"><strong>{destination.featured ? <Star size={13} /> : <MapPin size={13} />} {destination.label}</strong><span>{destination.kindLabel}{destination.aliases.length ? ` / also: ${destination.aliases.join(', ')}` : ''}</span></div>
             <div className="outbox-entry-state"><span className={`status-pill ${destination.active ? 'open' : 'expired'}`}><i />{destination.active ? 'Active' : 'Inactive'}</span></div>
+            <button className="text-button" disabled={busy === destination.id} onClick={() => toggle(destination, 'featured')}>{destination.featured ? 'Unfeature' : 'Feature'}</button>
+            {destination.kind !== 'country' && <button className="text-button" onClick={() => openParents(destination)}>Extra parents</button>}
             <button className="secondary-button" disabled={busy === destination.id} onClick={() => toggle(destination)}>{destination.active ? 'Deactivate' : 'Activate'}</button>
           </article>
         )) : <div className="empty-state"><MapPin size={22} /><strong>No destinations found</strong><span>Import GeoNames data or add destinations above.</span></div>}
+      </section>
+    </>
+  );
+}
+
+export function AdminDestinationLevels() {
+  const { data: reference } = useReferenceData();
+  const [country, setCountry] = useState('');
+  const [levels, setLevels] = useState([]);
+  const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
+
+  useEffect(() => {
+    if (!country) return;
+    getDestinationLevels(country).then((result) => setLevels(result.levels)).catch((requestError) => setError(requestError.message));
+  }, [country]);
+
+  async function save(event) {
+    event.preventDefault();
+    setError('');
+    setNotice('');
+    try {
+      const result = await saveDestinationLevels(country, levels.map((level) => ({ kind: level.kind, label: level.label, enabled: level.enabled })));
+      setLevels(result.levels);
+      setNotice('Level names saved.');
+    } catch (requestError) {
+      setError(requestError.message);
+    }
+  }
+
+  return (
+    <>
+      <SectionHeading eyebrow="MASTER DATA" title="Destination level names" subtitle="What each level is called in a country (for example the local word for level 1 and level 2). Shown in every picker and label." />
+      {error && <div className="auth-error" role="alert">{error}</div>}
+      {notice && <p className="team-notice" role="status">{notice}</p>}
+      <section className="surface-section admin-queue admin-settings-panel">
+        <label className="field-label">Country<select className="form-select" value={country} onChange={(event) => setCountry(event.target.value)}><option value="" disabled>Select country</option>{(reference?.countries ?? []).map((item) => <option key={item.code} value={item.code}>{item.name}</option>)}</select></label>
+        {country && levels.length > 0 && <form className="request-form" onSubmit={save}>
+          {levels.map((level, index) => (
+            <div className="request-form-grid" key={level.kind}>
+              <label className="field-label">{labelFor(reference?.destinationKinds, level.kind)} label<input className="form-input" value={level.label} minLength="2" maxLength="60" onChange={(event) => setLevels(levels.map((item, itemIndex) => itemIndex === index ? { ...item, label: event.target.value } : item))} required /></label>
+              <label className="checkbox-field"><input type="checkbox" checked={level.enabled} onChange={(event) => setLevels(levels.map((item, itemIndex) => itemIndex === index ? { ...item, enabled: event.target.checked } : item))} />Used in this country</label>
+            </div>
+          ))}
+          <button className="primary-button">Save level names</button>
+        </form>}
+      </section>
+    </>
+  );
+}
+
+export function AdminFeaturedImport() {
+  const { data: reference } = useReferenceData();
+  const [file, setFile] = useState(null);
+  const [country, setCountry] = useState('');
+  const [result, setResult] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  async function upload(event) {
+    event.preventDefault();
+    setBusy(true);
+    setError('');
+    try {
+      setResult(await importFeaturedDestinations(file, country));
+    } catch (requestError) {
+      setError(requestError.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <>
+      <SectionHeading eyebrow="MASTER DATA" title="Featured destinations import" subtitle="Upload a CSV with columns name, region, district, aliases (separate aliases with |) and optionally country_code. Rows that match exactly one destination are featured; nothing is guessed." />
+      {error && <div className="auth-error" role="alert">{error}</div>}
+      <section className="surface-section admin-queue admin-settings-panel">
+        <form className="destination-admin-form" onSubmit={upload}>
+          <label className="field-label">CSV file<input className="form-input" type="file" accept=".csv,text/csv" onChange={(event) => setFile(event.target.files?.[0] ?? null)} required /></label>
+          <label className="field-label">Default country (rows without country_code)<select className="form-select" value={country} onChange={(event) => setCountry(event.target.value)}><option value="">None</option>{(reference?.countries ?? []).map((item) => <option key={item.code} value={item.code}>{item.name}</option>)}</select></label>
+          <button className="primary-button" disabled={busy || !file}><Upload size={15} />{busy ? 'Importing...' : 'Import'}</button>
+        </form>
+        {result && <>
+          <p className="team-notice" role="status">{result.totals.featured} of {result.totals.rows} rows featured; {result.totals.unresolved} need attention.</p>
+          {result.report.filter((row) => row.status !== 'featured').map((row) => (
+            <article className="outbox-entry" key={row.line}>
+              <div className="outbox-entry-main"><strong>Line {row.line}: {row.name ?? '(no name)'}{row.region ? `, ${row.region}` : ''}{row.district ? `, ${row.district}` : ''}</strong><span>{row.message}{row.candidates?.length ? ` Candidates: ${row.candidates.map((candidate) => `${candidate.name} (${labelFor(reference?.destinationKinds, candidate.kind)})`).join('; ')}` : ''}</span></div>
+              <div className="outbox-entry-state"><span className="status-pill draft"><i />{row.status.replace('_', ' ')}</span></div>
+            </article>
+          ))}
+        </>}
+      </section>
+    </>
+  );
+}
+
+export function AdminHotelPropertyQueue() {
+  const [properties, setProperties] = useState([]);
+  const [reasons, setReasons] = useState({});
+  const [busy, setBusy] = useState('');
+  const [error, setError] = useState('');
+
+  async function refresh() {
+    try {
+      setProperties((await listPendingHotelProperties()).properties);
+    } catch (requestError) {
+      setError(requestError.message);
+    }
+  }
+
+  useEffect(() => { refresh(); }, []);
+
+  async function decide(property, decision) {
+    setBusy(property.id);
+    setError('');
+    try {
+      await decideHotelProperty(property.id, decision, reasons[property.id].trim());
+      setProperties((current) => current.filter((item) => item.id !== property.id));
+    } catch (requestError) {
+      setError(requestError.message);
+    } finally {
+      setBusy('');
+    }
+  }
+
+  return (
+    <>
+      <SectionHeading eyebrow="TRUST AND SAFETY" title="Hotels awaiting review" subtitle="Hotels added or moved by an approved hotel account. Approved hotels start receiving leads for their area." action={<button className="secondary-button" onClick={refresh}><RefreshCw size={15} />Refresh</button>} />
+      {error && <div className="auth-error" role="alert">{error}</div>}
+      <section className="surface-section admin-queue">
+        {properties.length ? properties.map((property) => {
+          const reason = reasons[property.id]?.trim() ?? '';
+          return <article className="verification-row" key={property.id}>
+            <div className="verification-main">
+              <div className="verification-title"><span className="role-option-icon"><Hotel size={17} /></span><div><h2>{property.name}</h2><span>{property.organizationName} / account {property.sellerStatus}</span></div></div>
+              <div className="verification-facts"><span><MapPin size={14} />{property.destination?.label ?? '-'}</span>{property.roomCount && <span>{property.roomCount} rooms</span>}</div>
+              <label className="field-label">Decision reason<textarea value={reasons[property.id] ?? ''} onChange={(event) => setReasons((current) => ({ ...current, [property.id]: event.target.value }))} minLength="5" maxLength="500" placeholder="Shared with the hotel account" /></label>
+            </div>
+            <div className="verification-actions"><button className="secondary-button reject-button" disabled={busy === property.id || reason.length < 5} onClick={() => decide(property, 'rejected')}>Reject</button><button className="primary-button" disabled={busy === property.id || reason.length < 5} onClick={() => decide(property, 'approved')}>Approve</button></div>
+          </article>;
+        }) : <div className="empty-state"><Hotel size={22} /><strong>No hotels waiting</strong><span>New and moved hotels appear here for review.</span></div>}
       </section>
     </>
   );

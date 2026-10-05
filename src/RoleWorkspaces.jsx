@@ -3,7 +3,9 @@ import { ArrowUpRight, BadgeCheck, Flag, BedDouble, Building2, CalendarDays, Che
 import { formatMinor, fromMinorUnits, toMinorUnits } from './money.js';
 import { labelFor, useReferenceData } from './referenceData.js';
 import { useCan } from './capabilities.js';
-import { DestinationPicker } from './DestinationPicker.jsx';
+import { LeadBadges } from './LeadDestinations.jsx';
+import { CoverageEditor } from './CoverageEditor.jsx';
+import { HotelPropertiesManager } from './SellerSettings.jsx';
 import { VerificationDocuments } from './SellerDocuments.jsx';
 
 export function DmcOverview({ requests, offers, sellerProfile, loading, onOpenRequests, onOpenOffers, onRespond }) {
@@ -78,17 +80,6 @@ export function HotelRequestWorkspace({ requests, sellerProfile, loading, onResp
   );
 }
 
-export function HotelProperties({ profile, organization }) {
-  return (
-    <section className="surface-section full-section property-workspace">
-      <div className="section-heading request-list-heading"><div><p className="eyebrow">HOTEL PROFILE</p><h2>{organization}</h2></div><span className={`status-pill ${profile?.verificationStatus === 'approved' ? 'open' : ''}`}><i />{profile?.verificationStatus ?? 'Loading'}</span></div>
-      <div className="property-hero"><div className="property-placeholder"><Hotel size={30} /><span>PROPERTY PROFILE</span></div><div><span className="property-location"><MapPin size={14} />{profile?.propertyCity ?? 'Property city not set'}</span><h3>{organization}</h3><p>Seller-listed property profile. Rooms and public description can be added after property management APIs are connected.</p><div className="property-tags"><span>{profile?.verificationStatus === 'approved' ? 'Verified seller' : 'Verification pending'}</span><span>Direct guest contact stays private</span></div></div></div>
-      <div className="property-facts"><div><span>Marketplace status</span><strong><i className="live-dot" />{profile?.verificationStatus === 'approved' ? 'Eligible' : 'Not listed'}</strong></div><div><span>Property city</span><strong>{profile?.propertyCity ?? '-'}</strong></div><div><span>Business type</span><strong>Hotelier</strong></div><div><span>Verification</span><strong>{profile?.verificationStatus ?? 'Loading'}</strong></div></div>
-      <p className="sample-footnote">Property identity is based on the registered seller organization; ownership evidence is reviewed separately by operations.</p>
-    </section>
-  );
-}
-
 export function HotelAvailability({ inventory, loading, onSave }) {
   const { data: reference } = useReferenceData();
   const canManageProfile = useCan('profile.manage');
@@ -141,20 +132,16 @@ export function RoleProfile({ role, profile, organization, onSave, onDocumentsCh
   const canManageProfile = useCan('profile.manage');
   const { data: reference } = useReferenceData();
   const [coverage, setCoverage] = useState([]);
-  const [propertyCity, setPropertyCity] = useState([]);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    setCoverage(profile?.coverage ?? []);
-    setPropertyCity(profile?.propertyDestination ? [profile.propertyDestination] : []);
+    setCoverage((profile?.coverage ?? []).map((destination) => ({ destination, mode: destination.mode ?? 'include' })));
   }, [profile]);
 
   async function submit(event) {
     event.preventDefault();
     setSaving(true);
-    await onSave(isDmc
-      ? { coverage_destination_ids: coverage.map((destination) => destination.id) }
-      : { property_destination_id: propertyCity[0]?.id ?? null });
+    await onSave({ coverage: coverage.map((rule) => ({ destination_id: rule.destination.id, mode: rule.mode })) });
     setSaving(false);
   }
 
@@ -162,11 +149,11 @@ export function RoleProfile({ role, profile, organization, onSave, onDocumentsCh
     <section className="surface-section full-section role-profile">
       <div className="section-heading request-list-heading"><div><p className="eyebrow">SELLER PROFILE</p><h2>{organization}</h2></div><span className={`status-pill ${profile?.verificationStatus === 'approved' ? 'open' : ''}`}><i />{profile?.verificationStatus ?? 'Loading'}</span></div>
       <div className="profile-detail-grid"><div><span>Destination coverage</span><strong>{isDmc ? profile?.coverageDestinations?.join(', ') || 'No destinations listed' : profile?.propertyCity || 'No property city listed'}</strong></div><div><span>Business type</span><strong>{isDmc ? 'Destination management company' : 'Hotelier'}</strong></div><div><span>Business verification</span><strong>{profile?.verificationStatus === 'approved' ? 'Approved' : 'Pending manual review'}</strong></div><div><span>Verification note</span><strong>{profile?.verificationReason || 'No review note available'}</strong></div></div>
-      <form className="seller-profile-form" onSubmit={submit}>
-        {isDmc ? <DestinationPicker label="Destination coverage" value={coverage} onChange={setCoverage} multiple max={reference?.limits?.maxCoverageDestinations ?? 1} /> : <DestinationPicker label="Property city" value={propertyCity} onChange={setPropertyCity} kinds={['city']} placeholder="Search your city" />}
-        <button className="primary-button" type="submit" disabled={saving || !profile || !canManageProfile || (isDmc ? !coverage.length : !propertyCity.length)} title={canManageProfile ? undefined : 'Only owners and managers can change the company profile.'}>{saving ? 'Saving...' : 'Save profile'}</button>
-      </form>
-      <p className="privacy-note"><BadgeCheck size={15} />Changing your seller profile withdraws active offers and requires a new manual verification review.</p>
+      {isDmc ? <form className="seller-profile-form" onSubmit={submit}>
+        <CoverageEditor rules={coverage} onChange={setCoverage} max={reference?.limits?.maxCoverageDestinations ?? 1} />
+        <button className="primary-button" type="submit" disabled={saving || !profile || !canManageProfile || !coverage.some((rule) => rule.mode === 'include')} title={canManageProfile ? undefined : 'Only owners and managers can change the company profile.'}>{saving ? 'Saving...' : 'Save coverage'}</button>
+      </form> : <HotelPropertiesManager />}
+      {isDmc && <p className="privacy-note"><BadgeCheck size={15} />Changing your coverage withdraws active offers and requires a new manual verification review.</p>}
       <VerificationDocuments onUploaded={onDocumentsChanged} />
     </section>
   );
@@ -254,7 +241,7 @@ function SellerRequestList({ requests, onRespond, onMessage, onReport, onReconfi
   const canWriteOffers = useCan('offer.write');
   const canSubmitOffer = role !== 'dmc' || sellerProfile?.verificationStatus === 'approved';
   return <div className="seller-request-list">{requests.map((request) => { const action = sellerActionState(request, canSubmitOffer, canWriteOffers, 'Prepare offer'); return <article className="seller-request-row" key={request.id}>
-    <div className="seller-request-main"><div className="seller-request-title"><h3>{request.destination}</h3><span className="request-id">{request.requestCode}</span>{request.agencyVerified && <span className="verified-mark" title="Verified agency"><BadgeCheck size={14} /></span>}</div><span className="request-agency"><Building2 size={13} />{request.agencyName}{request.agencyVerified && <BadgeCheck size={13} />}</span><div className="request-detail-line"><span><CalendarDays size={14} />{request.dates}</span><span><UsersRound size={14} />{request.travelers}</span></div><p>{request.services?.map((service) => labelFor(reference?.services, service)).join(', ')}</p><TripChangeNotice request={request} /><NegotiationNotice request={request} onAnswer={onAnswerNegotiation} onRevise={onRevise} canWriteOffers={canWriteOffers} /></div>
+    <div className="seller-request-main"><div className="seller-request-title"><h3>{request.destination}</h3><span className="request-id">{request.requestCode}</span>{request.agencyVerified && <span className="verified-mark" title="Verified agency"><BadgeCheck size={14} /></span>}</div><span className="request-agency"><Building2 size={13} />{request.agencyName}{request.agencyVerified && <BadgeCheck size={13} />}</span><div className="request-detail-line"><span><CalendarDays size={14} />{request.dates}</span><span><UsersRound size={14} />{request.travelers}</span></div><p>{request.services?.map((service) => labelFor(reference?.services, service)).join(', ')}</p><LeadBadges request={request} /><TripChangeNotice request={request} /><NegotiationNotice request={request} onAnswer={onAnswerNegotiation} onRevise={onRevise} canWriteOffers={canWriteOffers} /></div>
     <div className="seller-request-side"><span className="request-deadline"><Clock3 size={13} />Respond by {request.deadline}</span><div className="seller-request-actions">{onReport && <button className="text-button report-link" onClick={() => onReport(request)}><Flag size={13} />Report</button>}{onMessage && <button className="secondary-button" onClick={() => onMessage(request)}><MessageSquareText size={14} />Message</button>}<SellerRequestAction request={request} action={action} onRespond={onRespond} onReconfirm={onReconfirm} onRevise={onRevise} canWriteOffers={canWriteOffers} /></div></div>
   </article>; })}</div>;
 }
@@ -265,7 +252,7 @@ function HotelRequestList({ requests, onRespond, onMessage, onReport, onReconfir
   const canWriteOffers = useCan('offer.write');
   const canSubmitOffer = sellerProfile?.verificationStatus === 'approved';
   return <div className="seller-request-list">{requests.map((request) => { const action = sellerActionState(request, canSubmitOffer, canWriteOffers, 'Quote rooms'); return <article className="seller-request-row" key={request.id}>
-    <div className="seller-request-main"><div className="seller-request-title"><h3>{request.destination}</h3><span className="request-id">{request.requestCode}</span>{request.agencyVerified && <span className="verified-mark" title="Verified agency"><BadgeCheck size={14} /></span>}</div><span className="request-agency"><Building2 size={13} />{request.agencyName}{request.agencyVerified && <BadgeCheck size={13} />}</span><div className="request-detail-line"><span><CalendarDays size={14} />{request.dates}</span><span><BedDouble size={14} />{request.roomCount ?? 1} rooms / {request.nights} nights</span></div><p>{request.mealPlan ? labelFor(reference?.mealPlans, request.mealPlan) : 'Meal plan flexible'} / {request.hotelCategory ? labelFor(reference?.hotelCategories, request.hotelCategory) : 'Any category'}</p><TripChangeNotice request={request} /><NegotiationNotice request={request} onAnswer={onAnswerNegotiation} onRevise={onRevise} canWriteOffers={canWriteOffers} /></div>
+    <div className="seller-request-main"><div className="seller-request-title"><h3>{request.destination}</h3><span className="request-id">{request.requestCode}</span>{request.agencyVerified && <span className="verified-mark" title="Verified agency"><BadgeCheck size={14} /></span>}</div><span className="request-agency"><Building2 size={13} />{request.agencyName}{request.agencyVerified && <BadgeCheck size={13} />}</span><div className="request-detail-line"><span><CalendarDays size={14} />{request.dates}</span><span><BedDouble size={14} />{request.roomCount ?? 1} rooms / {request.nights} nights</span></div><p>{request.mealPlan ? labelFor(reference?.mealPlans, request.mealPlan) : 'Meal plan flexible'} / {request.hotelCategory ? labelFor(reference?.hotelCategories, request.hotelCategory) : 'Any category'}</p><LeadBadges request={request} /><TripChangeNotice request={request} /><NegotiationNotice request={request} onAnswer={onAnswerNegotiation} onRevise={onRevise} canWriteOffers={canWriteOffers} /></div>
     <div className="seller-request-side"><span className="request-deadline"><Clock3 size={13} />Respond by {request.deadline}</span><div className="seller-request-actions">{onReport && <button className="text-button report-link" onClick={() => onReport(request)}><Flag size={13} />Report</button>}{onMessage && <button className="secondary-button" onClick={() => onMessage(request)}><MessageSquareText size={14} />Message</button>}<SellerRequestAction request={request} action={action} onRespond={onRespond} onReconfirm={onReconfirm} onRevise={onRevise} canWriteOffers={canWriteOffers} /></div></div>
   </article>; })}</div>;
 }

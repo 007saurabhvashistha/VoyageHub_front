@@ -93,6 +93,7 @@ export function OfferFormModal({ role, target, roomTypes = [], onClose, onSubmit
           room_count: optionalNumber(form.get('room_count')),
           taxes_included: form.get('taxes_included') === 'on',
           availability_confirmed: form.get('availability_confirmed') === 'on',
+          ...(form.get('hotel_property_id') ? { hotel_property_id: form.get('hotel_property_id') } : {}),
         }
       : {
           ...terms,
@@ -149,6 +150,7 @@ export function OfferFormModal({ role, target, roomTypes = [], onClose, onSubmit
 
             {isHotel && (
               <div className="request-form-grid">
+                {!target.reviseOfferId && target.matchingProperties?.length > 0 && <label className="field-label">Hotel for this offer<select className="form-select" name="hotel_property_id" defaultValue={target.matchingProperties[0].id} required>{target.matchingProperties.map((property) => <option key={property.id} value={property.id}>{property.name}</option>)}</select></label>}
                 <label className="field-label">Room type<input className="form-input" name="room_type" list="room-type-options" maxLength="120" required placeholder={roomTypes.length ? 'Choose or type a room type' : 'Type the room type'} /><datalist id="room-type-options">{roomTypes.map((roomType) => <option key={roomType} value={roomType} />)}</datalist></label>
                 <label className="field-label">Rooms<input className="form-input" name="room_count" type="number" min="1" max="50" defaultValue={target.roomCount ?? 1} required /></label>
                 <label className="field-label">Meal plan<select className="form-select" name="meal_plan" defaultValue={target.mealPlan ?? reference.mealPlans[0]?.value}>{reference.mealPlans.map((plan) => <option key={plan.value} value={plan.value}>{plan.label}</option>)}</select></label>
@@ -217,7 +219,19 @@ export function OfferDetails({ offer }) {
     offer.kind === 'hotel_room' && offer.availabilityConfirmed && 'Availability confirmed',
   ].filter(Boolean);
   return (
-    <details className="offer-details">
+    <>
+      {(offer.comparisonLabels?.length > 0 || offer.comparisonTotalMinor != null || offer.responseTimeMinutes != null) && <div className="comparison-meta">
+        {offer.comparisonLabels?.map((label) => <span className="status-pill open" key={label}><i />{labelFor(reference?.comparisonLabels, label)}</span>)}
+        {offer.comparisonTotalMinor != null
+          ? <strong>{formatMinor(offer.comparisonTotalMinor, offer.comparisonCurrency)} comparison total</strong>
+          : <small>Comparison currency conversion unavailable</small>}
+        {offer.comparisonPerTravellerMinor != null && <small>{formatMinor(offer.comparisonPerTravellerMinor, offer.comparisonCurrency)} per traveller</small>}
+        {offer.exchangeRate?.baseCurrency !== offer.exchangeRate?.quoteCurrency && offer.exchangeRate && <small>
+          {offer.exchangeRate.stale ? 'Cached rate' : 'Rate'}: {offer.exchangeRate.rate} {offer.exchangeRate.quoteCurrency} per {offer.exchangeRate.baseCurrency}, as of {offer.exchangeRate.rateDate}; fetched {new Date(offer.exchangeRate.fetchedAt).toLocaleString()} ({offer.exchangeRate.provider})
+        </small>}
+        {offer.responseTimeMinutes != null && <small>Responded in {formatResponseTime(offer.responseTimeMinutes)}</small>}
+      </div>}
+      <details className="offer-details">
       <summary>Terms{offer.lineItems?.length ? ` and ${offer.lineItems.length} price lines` : ''}{offer.attachments?.length ? ` / ${offer.attachments.length} file(s)` : ''}</summary>
       {terms.length > 0 && <p>{terms.join(' / ')}</p>}
       {offer.cancellationPolicy && <p><strong>Cancellation:</strong> {offer.cancellationPolicy}</p>}
@@ -226,8 +240,16 @@ export function OfferDetails({ offer }) {
       {offer.options?.length > 0 && <p>Line items and prices above are for the main option{offer.optionLabel ? ` (${offer.optionLabel})` : ''}. Alternative options share these terms.</p>}
       {offer.attachments?.length > 0 && <AttachmentList attachments={offer.attachments} />}
       {!terms.length && !offer.cancellationPolicy && !offer.paymentNotes && !offer.lineItems?.length && !offer.attachments?.length && <p>No additional terms were provided.</p>}
-    </details>
+      </details>
+    </>
   );
+}
+
+function formatResponseTime(minutes) {
+  if (minutes < 60) return `${minutes} min`;
+  const hours = Math.floor(minutes / 60);
+  const remainder = minutes % 60;
+  return remainder ? `${hours} hr ${remainder} min` : `${hours} hr`;
 }
 
 export function AttachmentList({ attachments, onRemove }) {

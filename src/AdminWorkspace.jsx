@@ -3,7 +3,7 @@ import { BadgeCheck, Building2, ExternalLink, Globe2, Hotel, LogOut, Mail, Refre
 import { createDocumentDownloadUrl, decideAgencyVerification, decideSellerVerification, getNotificationOutbox, listPendingAgencyVerifications, listPendingSellerProfiles, logoutAccount, retryNotificationOutbox } from './api.js';
 import { MfaSecurityPanel } from './MfaSecurity.jsx';
 import { AdminModeration } from './AdminModeration.jsx';
-import { AdminDestinations, AdminLegalDocuments, AdminOperations, AdminSettings } from './AdminPlatform.jsx';
+import { AdminDestinationLevels, AdminDestinations, AdminFeaturedImport, AdminHotelPropertyQueue, AdminLegalDocuments, AdminOperations, AdminSettings } from './AdminPlatform.jsx';
 import { documentStateClass, formatBytes } from './SellerDocuments.jsx';
 import { labelFor, useReferenceData } from './referenceData.js';
 
@@ -215,10 +215,13 @@ function AdminWorkspace({ account }) {
         </section>
         <p className="admin-policy-note">Approval is audited and enables request matching and offer submission for that seller organization.</p>
         <AgencyVerificationQueue />
+        <AdminHotelPropertyQueue />
         <AdminModeration />
         <AdminSettings />
         <AdminOperations />
         <AdminDestinations />
+        <AdminDestinationLevels />
+        <AdminFeaturedImport />
         <AdminLegalDocuments />
         <div className="page-heading admin-heading outbox-heading"><div><p className="eyebrow">DELIVERY OPERATIONS</p><h2>Notification outbox</h2><p className="page-subtitle">Durable delivery attempts and retry state.</p></div><button className="secondary-button" onClick={refreshOutbox} disabled={outboxLoading}><RefreshCw size={15} />Refresh</button></div>
         <div className="outbox-summary">{outbox.summary.map((item) => <span key={item.status}><strong>{item.count}</strong> {item.status.replace('_', ' ')}</span>)}</div>

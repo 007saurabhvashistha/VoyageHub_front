@@ -1,7 +1,7 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { ArrowRight, Building2, Globe2, Hotel, LockKeyhole, Mail, MapPin, UserRound } from 'lucide-react';
-import { loginAccount, registerAccount } from './api.js';
+import { getRegistrationCountries, loginAccount, registerAccount } from './api.js';
 import { useReferenceData } from './referenceData.js';
 import { DestinationPicker } from './DestinationPicker.jsx';
 import { LegalConsent, LegalLinks, requiredDocumentIds, useLegalDocuments } from './Legal.jsx';
@@ -17,7 +17,10 @@ function AuthPage({ mode }) {
   const location = useLocation();
   const { data: reference } = useReferenceData();
   const legal = useLegalDocuments();
-  const countries = reference?.countries ?? [];
+  const [countryData, setCountryData] = useState(null);
+  const [countryError, setCountryError] = useState(false);
+  const [countryAttempt, setCountryAttempt] = useState(0);
+  const countries = countryData?.countries ?? [];
   const [selectedRole, setSelectedRole] = useState('agency');
   const [coverage, setCoverage] = useState([]);
   const [propertyCity, setPropertyCity] = useState([]);
@@ -28,6 +31,14 @@ function AuthPage({ mode }) {
   const [submittedEmail, setSubmittedEmail] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const isRegister = mode === 'register';
+
+  useEffect(() => {
+    let active = true;
+    getRegistrationCountries()
+      .then((data) => active && setCountryData(data))
+      .catch(() => active && setCountryError(true));
+    return () => { active = false; };
+  }, [countryAttempt]);
 
   async function submitAccount(event) {
     event.preventDefault();
@@ -69,6 +80,10 @@ function AuthPage({ mode }) {
         setNotice(session.emailDeliveryStatus === 'queued'
           ? 'Account created. Your verification email is queued; verify your address before signing in.'
           : 'Account created, but email delivery is not configured. Verification is required before you can sign in.');
+        return;
+      }
+      if (isRegister && !session.verificationRequired) {
+        navigate('/login', { replace: true, state: { notice: 'Account created. Email verification is temporarily disabled; sign in to continue.' } });
         return;
       }
       if (session.mfaRequired) {
@@ -124,9 +139,12 @@ function AuthPage({ mode }) {
               {isRegister && <label className="auth-field"><span>Full name</span><span className="auth-input"><UserRound size={16} /><input name="fullName" autoComplete="name" placeholder="Your name" required /></span></label>}
               {isRegister && <label className="auth-field"><span>Business name</span><span className="auth-input"><Building2 size={16} /><input name="businessName" autoComplete="organization" placeholder="Company or property name" required /></span></label>}
               {isRegister && selectedRole === 'dmc' && <DestinationPicker label="Destination coverage" value={coverage} onChange={setCoverage} multiple max={reference?.limits?.maxCoverageDestinations ?? 1} />}
-              {isRegister && selectedRole === 'hotelier' && <DestinationPicker label="Property city" value={propertyCity} onChange={setPropertyCity} kinds={['city']} placeholder="Search your city" />}
+              {isRegister && selectedRole === 'hotelier' && <DestinationPicker label="Hotel location (you can add more hotels later)" value={propertyCity} onChange={setPropertyCity} kinds={reference?.hotelPropertyDestinationKinds ?? []} placeholder="Search the place or district of your hotel" />}
               <label className="auth-field"><span>Business email</span><span className="auth-input"><Mail size={16} /><input name="email" type="email" autoComplete="email" placeholder="you@company.com" required /></span></label>
-              {isRegister && <label className="auth-field"><span>Country or region</span><span className="auth-input"><MapPin size={16} /><select name="country" key={reference?.defaults?.country ?? 'loading'} defaultValue={reference?.defaults?.country ?? ''} required><option value="" disabled>{reference ? 'Select country' : 'Loading countries...'}</option>{countries.map((country) => <option key={country.code} value={country.code}>{country.name}</option>)}</select></span></label>}
+              {isRegister && <>
+                <label className="auth-field"><span>Country or region</span><span className="auth-input"><MapPin size={16} /><select name="country" key={countryData?.defaultCountry ?? 'loading'} defaultValue={countryData?.defaultCountry ?? ''} disabled={!countryData} required><option value="" disabled>{countryData ? 'Select country' : countryError ? 'Country list unavailable' : 'Loading countries...'}</option>{countries.map((country) => <option key={country.code} value={country.code}>{country.name}</option>)}</select></span></label>
+                {countryError && <p className="auth-error" role="alert">Country list could not be loaded. <button className="auth-inline-link" type="button" onClick={() => { setCountryError(false); setCountryData(null); setCountryAttempt((attempt) => attempt + 1); }}>Retry</button></p>}
+              </>}
               <label className="auth-field"><span>Password</span><span className="auth-input"><LockKeyhole size={16} /><input name="password" type="password" autoComplete={isRegister ? 'new-password' : 'current-password'} minLength={8} placeholder="At least 8 characters" required /></span></label>
             </div>
 

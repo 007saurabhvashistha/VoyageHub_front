@@ -43,6 +43,8 @@ import { MfaChallengePage, MfaSecurityPanel, MfaSetupPage } from './MfaSecurity.
 import { CookieNotice, LegalAcceptanceGate, LegalLinks } from './Legal.jsx';
 import { AccountPanel, DeletionPendingPage } from './AccountPanel.jsx';
 import { DestinationPicker } from './DestinationPicker.jsx';
+import { AudiencePreview, LeadBadges, StopsEditor, routeText } from './LeadDestinations.jsx';
+import { AlertPreferencesPanel } from './SellerSettings.jsx';
 import { BookingsWorkspace } from './Bookings.jsx';
 import { IntegrationsPanel } from './Integrations.jsx';
 import { VerificationDocuments } from './SellerDocuments.jsx';
@@ -67,6 +69,7 @@ import {
   logoutAccount,
   publishMarketplaceRequest,
   reconfirmMarketplaceOffer,
+  repostRequest,
   reviseMarketplaceOffer,
   submitDmcOffer,
   submitHotelOffer,
@@ -74,6 +77,7 @@ import {
   saveHotelInventory,
   sendRequestMessage,
   sendMessageAttachment,
+  setMarketplaceOfferShortlisted,
   undoMarketplaceAward,
   uploadOfferAttachment,
   withdrawOfferNegotiation,
@@ -185,6 +189,7 @@ function Workspace({ role, account }) {
       { label: 'My offers', icon: MessageSquareText },
       { label: 'Bookings', icon: ClipboardCheck },
       { label: 'Company profile', icon: Building2 },
+      { label: 'Lead alerts', icon: Bell },
       { label: 'Team', icon: UserCog },
       { label: 'Integrations', icon: Webhook, capability: 'integration.manage' },
       { label: 'Security', icon: ShieldCheck },
@@ -194,6 +199,7 @@ function Workspace({ role, account }) {
       { label: 'Booking requests', icon: FileText },
       { label: 'Bookings', icon: ClipboardCheck },
       { label: 'Properties', icon: Hotel },
+      { label: 'Lead alerts', icon: Bell },
       { label: 'Availability', icon: CalendarDays },
       { label: 'Team', icon: UserCog },
       { label: 'Integrations', icon: Webhook, capability: 'integration.manage' },
@@ -415,6 +421,16 @@ function Workspace({ role, account }) {
     }
   }
 
+  async function setOfferShortlisted(offer, shortlisted) {
+    try {
+      await setMarketplaceOfferShortlisted(offer.id, shortlisted);
+      await refreshComparison(offer.requestId);
+      setToast(shortlisted ? `${offer.sellerName} added to shortlist.` : `${offer.sellerName} removed from shortlist.`);
+    } catch (error) {
+      setMarketplaceError(error.message);
+    }
+  }
+
   async function withdrawNegotiation(offer) {
     try {
       await withdrawOfferNegotiation(offer.openNegotiation.id);
@@ -564,6 +580,7 @@ function Workspace({ role, account }) {
           {role === 'hotelier' && activePage === 'Overview' && <HotelOverview requests={requests} offers={offers} sellerProfile={sellerProfile} loading={dataLoading} onOpenRequests={() => setActivePage('Booking requests')} onOpenAvailability={() => setActivePage('Availability')} onRespond={setResponseTarget} />}
           {role === 'hotelier' && activePage === 'Booking requests' && <HotelRequestWorkspace requests={requests} sellerProfile={sellerProfile} loading={dataLoading} onRespond={setResponseTarget} onReconfirm={reconfirmOffer} onAnswerNegotiation={answerNegotiation} onRevise={(request) => setResponseTarget({ ...request, reviseOfferId: request.myOfferId })} onReport={(request) => setReportTarget({ type: 'request', id: request.id, label: `request ${request.requestCode}` })} onMessage={(request) => setMessageThread({ requestId: request.id, requestCode: request.requestCode, peerName: request.agencyName })} />}
           {role === 'hotelier' && activePage === 'Properties' && <RoleProfile role="hotelier" profile={sellerProfile} organization={details.organization} onSave={saveSellerProfile} onDocumentsChanged={syncMarketplace} />}
+          {role !== 'agency' && activePage === 'Lead alerts' && <AlertPreferencesPanel role={role} />}
           {role === 'hotelier' && activePage === 'Availability' && <HotelAvailability inventory={inventory} loading={dataLoading} onSave={saveInventory} />}
 
           <footer className="page-footer"><span>Lead Exchange</span><LegalLinks /></footer>
@@ -573,7 +590,17 @@ function Workspace({ role, account }) {
       {createOpen && <CreateRequestModal draft={draftToPublish} onClose={() => { setCreateOpen(false); setDraftToPublish(null); }} onCreate={saveRequestDraft} onPublish={publishDraft} />}
 
       {responseTarget && <OfferFormModal role={role} target={responseTarget} roomTypes={[...new Set(inventory.map((item) => item.roomType))]} onClose={() => setResponseTarget(null)} onSubmit={saveSellerOffer} />}
-      {comparison && <OfferComparison request={comparison.request} offers={comparison.offers} onNegotiate={sendNegotiation} onWithdrawNegotiation={withdrawNegotiation} onChangeTrip={() => setTripChangeTarget(comparison.request)} onReport={(offer) => setReportTarget({ type: 'offer', id: offer.id, label: `offer from ${offer.sellerName}` })} onMessage={(offer) => setMessageThread({ requestId: comparison.request.id, requestCode: comparison.request.requestCode, sellerOrganizationId: offer.sellerOrganizationId, peerName: offer.sellerName })} onAward={async (selections, notSelectedReason) => {
+      {comparison && <OfferComparison request={comparison.request} offers={comparison.offers} onShortlist={setOfferShortlisted} onNegotiate={sendNegotiation} onWithdrawNegotiation={withdrawNegotiation} onChangeTrip={() => setTripChangeTarget(comparison.request)} onRepost={async () => {
+        try {
+          const other = reference?.requirementTypes.find((type) => type.value !== comparison.request.requirementType)?.value;
+          const result = await repostRequest(comparison.request.id, { requirementType: other, cancelOriginal: true });
+          setComparison(null);
+          await syncMarketplace();
+          setToast(`Lead cancelled and copied to draft ${result.request.requestCode}. Review and publish it.`);
+        } catch (error) {
+          setMarketplaceError(error.message);
+        }
+      }} onReport={(offer) => setReportTarget({ type: 'offer', id: offer.id, label: `offer from ${offer.sellerName}` })} onMessage={(offer) => setMessageThread({ requestId: comparison.request.id, requestCode: comparison.request.requestCode, sellerOrganizationId: offer.sellerOrganizationId, peerName: offer.sellerName })} onAward={async (selections, notSelectedReason) => {
         try {
           await awardMarketplaceOffer(comparison.request.id, selections, notSelectedReason);
           setComparison(null);
@@ -659,6 +686,12 @@ function CreateRequestModal({ draft, onClose, onCreate, onPublish }) {
   const [visibility, setVisibility] = useState('open');
   const [invitedSuppliers, setInvitedSuppliers] = useState([]);
   const [destination, setDestination] = useState([]);
+  const [requirementType, setRequirementType] = useState('');
+  const [stops, setStops] = useState([]);
+  const [hotelCategory, setHotelCategory] = useState('');
+  const isHotelOnly = reference?.requirementTypes.find((type) => type.value === requirementType)?.audience === 'hotelier';
+  const allowedServices = (reference?.services ?? []).filter((service) => service.allowedFor.includes(requirementType));
+  const chosenDestinationIds = isHotelOnly ? destination.map((item) => item.id) : stops.map((stop) => stop.destination.id);
   const now = new Date();
   const deadlineLimits = reference?.limits.requestDeadline;
   const deadlineInputFormat = "yyyy-MM-dd'T'HH:mm";
@@ -667,8 +700,12 @@ function CreateRequestModal({ draft, onClose, onCreate, onPublish }) {
     event.preventDefault();
     setFormError('');
     const form = new FormData(event.currentTarget);
-    const services = form.getAll('services');
-    if (!destination.length) {
+    const services = isHotelOnly ? allowedServices.map((service) => service.value) : form.getAll('services');
+    if (!requirementType) {
+      setFormError('Choose whether you need a hotel only or a full itinerary.');
+      return;
+    }
+    if (!chosenDestinationIds.length) {
       setFormError('Choose a destination from the list.');
       return;
     }
@@ -694,7 +731,10 @@ function CreateRequestModal({ draft, onClose, onCreate, onPublish }) {
     }
 
     const fields = {
-      destination_id: destination[0].id,
+      requirement_type: requirementType,
+      destinations: isHotelOnly
+        ? destination.map((item) => ({ destination_id: item.id }))
+        : stops.map((stop) => ({ destination_id: stop.destination.id, nights: stop.nights ? Number(stop.nights) : null })),
       travel_start_date: dateMode === 'exact' ? startDate : null,
       travel_end_date: dateMode === 'exact' ? endDate : null,
       travel_month: dateMode === 'month' ? form.get('travelMonth') : null,
@@ -703,7 +743,7 @@ function CreateRequestModal({ draft, onClose, onCreate, onPublish }) {
       children: Number(form.get('children')),
       infants: Number(form.get('infants')),
       group_type: form.get('groupType'),
-      hotel_category: form.get('hotelCategory') ? Number(form.get('hotelCategory')) : null,
+      hotel_category: hotelCategory ? Number(hotelCategory) : null,
       room_count: form.get('roomCount') ? Number(form.get('roomCount')) : null,
       meal_plan: form.get('mealPlan') || null,
       services,
@@ -730,15 +770,27 @@ function CreateRequestModal({ draft, onClose, onCreate, onPublish }) {
         {draft ? (
           <>
             <p className="modal-copy">This allowlisted snapshot is what matched sellers will receive. No traveler names, contacts, or internal notes are included.</p>
-            <dl className="request-preview-list"><div><dt>Destination</dt><dd>{draft.destination}, {draft.destinationCountry}</dd></div><div><dt>Travel</dt><dd>{draft.dates} / {draft.nights} nights</dd></div><div><dt>Travelers</dt><dd>{draft.travelers}</dd></div><div><dt>Services</dt><dd>{draft.services.map((service) => labelFor(reference?.services, service)).join(', ')}</dd></div><div><dt>Response deadline</dt><dd>{new Date(draft.responseDeadline).toLocaleString()}</dd></div><div><dt>Visibility</dt><dd>{labelFor(reference?.requestVisibilities, draft.visibility)}</dd></div>{draft.invitedSellers?.length > 0 && <div><dt>Invited suppliers</dt><dd>{draft.invitedSellers.map((seller) => seller.name).join(', ')}</dd></div>}</dl>
+            <dl className="request-preview-list"><div><dt>Lead type</dt><dd>{labelFor(reference?.requirementTypes, draft.requirementType)}</dd></div><div><dt>Destination</dt><dd>{draft.destinations?.length ? routeText(draft.destinations) : draft.destination}, {draft.destinationCountry}</dd></div><div><dt>Travel</dt><dd>{draft.dates} / {draft.nights} nights</dd></div><div><dt>Travelers</dt><dd>{draft.travelers}</dd></div><div><dt>Services</dt><dd>{draft.services.map((service) => labelFor(reference?.services, service)).join(', ')}</dd></div><div><dt>Response deadline</dt><dd>{new Date(draft.responseDeadline).toLocaleString()}</dd></div><div><dt>Visibility</dt><dd>{labelFor(reference?.requestVisibilities, draft.visibility)}</dd></div>{draft.invitedSellers?.length > 0 && <div><dt>Invited suppliers</dt><dd>{draft.invitedSellers.map((seller) => seller.name).join(', ')}</dd></div>}</dl>
             <div className="modal-actions"><button type="button" className="secondary-button" onClick={onClose}>Keep draft</button><button type="button" className="primary-button" onClick={onPublish}>Publish request</button></div>
           </>
         ) : !reference ? <div className="empty-state">{referenceError || 'Loading request options...'}</div> : (
           <form className="request-form" onSubmit={submitDraft}>
-            <DestinationPicker label="Destination" value={destination} onChange={setDestination} placeholder="Search city, region or country" />
+            <fieldset className="requirement-picker"><legend>What do you need?</legend>
+              {reference.requirementTypes.map((type) => (
+                <label key={type.value} className={`requirement-option ${requirementType === type.value ? 'selected' : ''}`}>
+                  <input type="radio" name="requirementType" value={type.value} checked={requirementType === type.value} onChange={() => { setRequirementType(type.value); setDestination([]); setStops([]); }} />
+                  <strong>{type.label}</strong><small>{type.description}</small>
+                </label>
+              ))}
+              <small className="table-secondary">The lead type cannot be changed after publishing.</small>
+            </fieldset>
+            {requirementType && (isHotelOnly
+              ? <DestinationPicker label="Destination" value={destination} onChange={setDestination} kinds={reference.limits.hotelLeadAllowedDestinationKinds ?? []} placeholder="Search a state, district or place" />
+              : <StopsEditor stops={stops} onChange={setStops} max={reference.limits.maxRequestDestinations ?? 1} />)}
+            <AudiencePreview requirementType={requirementType} destinationIds={chosenDestinationIds} hotelCategory={hotelCategory} />
             <div className="request-form-grid"><label className="field-label">Date mode<select className="form-select" value={dateMode} onChange={(event) => setDateMode(event.target.value)}><option value="exact">Exact dates</option><option value="month">Month and nights</option></select></label>{dateMode === 'exact' ? <><label className="field-label">Arrival<input className="form-input" name="travelStartDate" type="date" min={format(now, 'yyyy-MM-dd')} required /></label><label className="field-label">Departure<input className="form-input" name="travelEndDate" type="date" min={format(now, 'yyyy-MM-dd')} required /></label></> : <><label className="field-label">Travel month<input className="form-input" name="travelMonth" type="month" min={format(now, 'yyyy-MM')} required /></label><label className="field-label">Nights<input className="form-input" name="nights" type="number" min="1" max="90" required /></label></>}
-              <label className="field-label">Adults<input className="form-input" name="adults" type="number" min="1" max="100" defaultValue="2" required /></label><label className="field-label">Children<input className="form-input" name="children" type="number" min="0" max="80" defaultValue="0" /></label><label className="field-label">Infants<input className="form-input" name="infants" type="number" min="0" max="40" defaultValue="0" /></label><label className="field-label">Group type<select className="form-select" name="groupType">{reference.groupTypes.map((type) => <option key={type.value} value={type.value}>{type.label}</option>)}</select></label><label className="field-label">Hotel category<select className="form-select" name="hotelCategory"><option value="">Any</option>{reference.hotelCategories.map((category) => <option key={category.value} value={category.value}>{category.label}</option>)}</select></label><label className="field-label">Rooms<input className="form-input" name="roomCount" type="number" min="1" max="50" defaultValue="1" /></label><label className="field-label">Meal plan<select className="form-select" name="mealPlan"><option value="">Any</option>{reference.mealPlans.map((plan) => <option key={plan.value} value={plan.value}>{plan.label}</option>)}</select></label></div>
-            <fieldset className="service-picker"><legend>Services requested</legend>{reference.services.map((service) => <label key={service.value}><input type="checkbox" name="services" value={service.value} />{service.label}</label>)}</fieldset>
+              <label className="field-label">Adults<input className="form-input" name="adults" type="number" min="1" max="100" defaultValue="2" required /></label><label className="field-label">Children<input className="form-input" name="children" type="number" min="0" max="80" defaultValue="0" /></label><label className="field-label">Infants<input className="form-input" name="infants" type="number" min="0" max="40" defaultValue="0" /></label><label className="field-label">Group type<select className="form-select" name="groupType">{reference.groupTypes.map((type) => <option key={type.value} value={type.value}>{type.label}</option>)}</select></label><label className="field-label">Hotel category<select className="form-select" name="hotelCategory" value={hotelCategory} onChange={(event) => setHotelCategory(event.target.value)}><option value="">Any</option>{reference.hotelCategories.map((category) => <option key={category.value} value={category.value}>{category.label}</option>)}</select></label><label className="field-label">Rooms<input className="form-input" name="roomCount" type="number" min="1" max="50" defaultValue="1" /></label><label className="field-label">Meal plan<select className="form-select" name="mealPlan"><option value="">Any</option>{reference.mealPlans.map((plan) => <option key={plan.value} value={plan.value}>{plan.label}</option>)}</select></label></div>
+            {requirementType && <fieldset className="service-picker"><legend>Services requested</legend>{allowedServices.map((service) => <label key={service.value}><input type="checkbox" name="services" value={service.value} {...(isHotelOnly ? { checked: true, disabled: true, readOnly: true } : {})} />{service.label}</label>)}</fieldset>}
             <p className="field-label budget-title">Optional budget range</p><div className="request-form-grid budget-grid"><select className="form-select" name="budgetCurrency" aria-label="Budget currency" defaultValue={reference.defaults.currency}>{reference.currencies.map((code) => <option key={code} value={code}>{code}</option>)}</select><input className="form-input" name="budgetMin" type="number" min="0" step="any" placeholder="Minimum" /><input className="form-input" name="budgetMax" type="number" min="0" step="any" placeholder="Maximum" /></div>
             <label className="field-label">Response deadline<input className="form-input" name="responseDeadline" type="datetime-local" required min={format(addHours(now, deadlineLimits.minHours), deadlineInputFormat)} max={format(addDays(now, deadlineLimits.maxDays), deadlineInputFormat)} defaultValue={format(addHours(now, deadlineLimits.defaultHours), deadlineInputFormat)} /></label>
             <label className="field-label">Who can see this request<select className="form-select" value={visibility} onChange={(event) => setVisibility(event.target.value)}>{reference.requestVisibilities.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
@@ -752,7 +804,7 @@ function CreateRequestModal({ draft, onClose, onCreate, onPublish }) {
   );
 }
 
-function OfferComparison({ request, offers, onAward, onUndoAward, onNegotiate, onWithdrawNegotiation, onChangeTrip, onMessage, onReport, onClose }) {
+function OfferComparison({ request, offers, onAward, onUndoAward, onShortlist, onNegotiate, onWithdrawNegotiation, onChangeTrip, onRepost, onMessage, onReport, onClose }) {
   const { data: reference } = useReferenceData();
   const [awardSelections, setAwardSelections] = useState([]);
   const [negotiationTarget, setNegotiationTarget] = useState(null);
@@ -762,6 +814,7 @@ function OfferComparison({ request, offers, onAward, onUndoAward, onNegotiate, o
   const canAward = ['open', 'closed'].includes(request.status) && canAwardRole;
   const canChangeTrip = useCan('request.write') && request.status === 'open';
   const canMessage = useCan('message.write');
+  const canWriteRequest = useCan('request.write');
   const canNegotiate = useCan('request.write') && ['open', 'closed'].includes(request.status);
   const awaitingCount = offers.filter((offer) => offer.needsReconfirmation).length;
   const awardTarget = awardSelections.length > 0;
@@ -795,7 +848,8 @@ function OfferComparison({ request, offers, onAward, onUndoAward, onNegotiate, o
     <div className="modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
       <section className="modal comparison-modal" role="dialog" aria-modal="true" aria-labelledby="comparison-title">
         <div className="modal-heading"><div><p className="eyebrow">AGENCY COMPARISON</p><h2 id="comparison-title">{request.destination} offers</h2></div><button className="icon-button" aria-label="Close comparison" onClick={onClose}><X size={18} /></button></div>
-        <div className="trip-summary"><span><CalendarDays size={14} />{request.dates} / {request.nights} nights</span><span><UsersRound size={14} />{request.travelers}{request.roomCount ? ` / ${request.roomCount} rooms` : ''}</span>{request.tripChangedAt && <span className="status-pill draft"><i />Changed {new Date(request.tripChangedAt).toLocaleDateString()}</span>}{canChangeTrip && !awardTarget && <button className="secondary-button" onClick={onChangeTrip}>Change trip details</button>}</div>
+        <div className="trip-summary"><span><CalendarDays size={14} />{request.dates} / {request.nights} nights</span><span><UsersRound size={14} />{request.travelers}{request.roomCount ? ` / ${request.roomCount} rooms` : ''}</span>{request.tripChangedAt && <span className="status-pill draft"><i />Changed {new Date(request.tripChangedAt).toLocaleDateString()}</span>}{canChangeTrip && !awardTarget && <button className="secondary-button" onClick={onChangeTrip}>Change trip details</button>}{canWriteRequest && ['draft', 'open'].includes(request.status) && onRepost && !awardTarget && <button className="text-button" onClick={onRepost} title="The lead type cannot change after publishing. This cancels the lead and copies it into a new draft of the other type.">Repost as {labelFor(reference?.requirementTypes, reference?.requirementTypes.find((type) => type.value !== request.requirementType)?.value)}</button>}</div>
+        <LeadBadges request={request} />
         {awaitingCount > 0 && !awardTarget && <p className="trip-change-note">{awaitingCount} offer(s) were priced for earlier trip details. They can be awarded once the seller re-confirms or revises them.</p>}
         {canUndo && <div className="negotiation-notice">
           <p>Awarded {new Date(request.awardedAt).toLocaleTimeString()}. You can undo this decision until {new Date(request.awardUndoUntil).toLocaleTimeString()}, as long as no booking has been confirmed. Every offer becomes active again and sellers are told.</p>
@@ -826,7 +880,7 @@ function OfferComparison({ request, offers, onAward, onUndoAward, onNegotiate, o
             if (!failure) setNegotiationTarget(null);
             return failure;
           }} />
-        ) : offers.length ? <div className="comparison-list">{offers.map((offer) => <article className="comparison-offer" key={offer.id}><div><strong>{offer.sellerName}</strong><small>{offer.kind === 'hotel_room' ? `${offer.roomType} / ${offer.roomCount ?? 1} room(s)` : 'Land package'} · valid through {new Date(offer.validityUntil).toLocaleDateString()}</small><span>{offer.inclusions.map((item) => labelFor(reference?.offerInclusions, item)).join(', ')}</span><OfferDetails offer={offer} /><OfferOptionList offer={offer} reference={reference} canAward={awardable(offer)} onAward={(option) => startAward(offer, option)} />{offer.openNegotiation && <span className="status-pill draft"><i />{labelFor(reference?.negotiationKinds, offer.openNegotiation.kind)} sent{offer.openNegotiation.counterPriceMinor != null ? `: ${formatMinor(offer.openNegotiation.counterPriceMinor, offer.currency)}` : ''}{offer.openNegotiation.optionLabel ? ` (${offer.openNegotiation.optionLabel})` : ''}, waiting for the seller</span>}</div><div className="comparison-price-block">{offer.optionLabel && <small>{offer.optionLabel}</small>}<strong className="comparison-price">{formatOfferPrice(offer)}</strong>{offer.kind === 'hotel_room' && offer.estimatedTotalMinor != null && <small>Est. stay {formatMinor(offer.estimatedTotalMinor, offer.currency)}</small>}{offer.perTravellerMinor != null && <small>{formatMinor(offer.perTravellerMinor, offer.currency)} per traveller ({offer.travellers})</small>}</div><div className="comparison-actions">{offer.needsReconfirmation && <span className="status-pill draft" title="The seller has not yet confirmed this price for the updated trip."><i />Awaiting re-confirmation</span>}{canMessage && <button className="secondary-button" onClick={() => onMessage(offer)}><MessageSquareText size={14} />Message</button>}{canNegotiate && ['submitted', 'shortlisted'].includes(offer.status) && (offer.openNegotiation
+        ) : offers.length ? <div className="comparison-list">{offers.map((offer) => <article className="comparison-offer" key={offer.id}><div><strong>{offer.sellerName}</strong>{offer.matchType && offer.matchType !== 'full' && <span className={`lead-badge match-${offer.matchType}`}>{labelFor(reference?.matchTypes, offer.matchType)}</span>}<small>{offer.kind === 'hotel_room' ? `${offer.hotelPropertyName ? `${offer.hotelPropertyName} / ` : ''}${offer.roomType} / ${offer.roomCount ?? 1} room(s)` : 'Land package'} · valid through {new Date(offer.validityUntil).toLocaleDateString()}</small><span>{offer.inclusions.map((item) => labelFor(reference?.offerInclusions, item)).join(', ')}</span><OfferDetails offer={offer} /><OfferOptionList offer={offer} reference={reference} canAward={awardable(offer)} onAward={(option) => startAward(offer, option)} />{offer.openNegotiation && <span className="status-pill draft"><i />{labelFor(reference?.negotiationKinds, offer.openNegotiation.kind)} sent{offer.openNegotiation.counterPriceMinor != null ? `: ${formatMinor(offer.openNegotiation.counterPriceMinor, offer.currency)}` : ''}{offer.openNegotiation.optionLabel ? ` (${offer.openNegotiation.optionLabel})` : ''}, waiting for the seller</span>}</div><div className="comparison-price-block">{offer.optionLabel && <small>{offer.optionLabel}</small>}<strong className="comparison-price">{formatOfferPrice(offer)}</strong>{offer.kind === 'hotel_room' && offer.estimatedTotalMinor != null && <small>Est. stay {formatMinor(offer.estimatedTotalMinor, offer.currency)}</small>}{offer.perTravellerMinor != null && <small>{formatMinor(offer.perTravellerMinor, offer.currency)} per traveller ({offer.travellers})</small>}</div><div className="comparison-actions">{offer.needsReconfirmation && <span className="status-pill draft" title="The seller has not yet confirmed this price for the updated trip."><i />Awaiting re-confirmation</span>}{canWriteRequest && ['open', 'closed'].includes(request.status) && ['submitted', 'shortlisted'].includes(offer.status) && <button className="secondary-button" onClick={() => onShortlist(offer, offer.status !== 'shortlisted')}>{offer.status === 'shortlisted' ? 'Remove shortlist' : 'Shortlist'}</button>}{canMessage && <button className="secondary-button" onClick={() => onMessage(offer)}><MessageSquareText size={14} />Message</button>}{canNegotiate && ['submitted', 'shortlisted'].includes(offer.status) && (offer.openNegotiation
           ? <button className="secondary-button" onClick={() => onWithdrawNegotiation(offer)}>Withdraw request</button>
           : <button className="secondary-button" onClick={() => setNegotiationTarget(offer)}>Negotiate</button>)}{awardable(offer) && <button className="primary-button" disabled={offer.needsReconfirmation} onClick={() => startAward(offer, null)}>{offer.options?.length ? 'Award main option' : 'Award offer'}</button>}<button className="text-button report-link" onClick={() => onReport(offer)}><Flag size={13} />Report</button></div></article>)}</div> : <div className="empty-state"><MessageSquareText size={22} /><strong>No verified offers yet</strong><span>Offers from verified sellers will appear here.</span></div>}
         <p className="privacy-note">Awarding does not confirm a booking or release guest details.</p>
@@ -846,6 +900,11 @@ function TripChangeModal({ request, onClose, onSave }) {
   const currentDeadline = new Date(request.responseDeadline);
   const earliestDeadline = deadlineLimits ? new Date(Math.max(currentDeadline.getTime(), addHours(now, deadlineLimits.minHours).getTime())) : currentDeadline;
   const needsExtension = deadlineLimits && currentDeadline < addHours(now, deadlineLimits.minHours);
+  const isHotelOnly = reference?.requirementTypes.find((type) => type.value === request.requirementType)?.audience === 'hotelier';
+  const initialStops = (request.destinations ?? []).map((stop) => ({ destination: { id: stop.destinationId, name: stop.name, kind: stop.kind, label: stop.name }, nights: stop.nights ?? '' }));
+  const [stops, setStops] = useState(initialStops);
+  const stopsKey = (list) => list.map((stop) => `${stop.destination.id}:${stop.nights || ''}`).join('|');
+  const destinationsChanged = stopsKey(stops) !== stopsKey(initialStops);
 
   async function submit(event) {
     event.preventDefault();
@@ -858,9 +917,14 @@ function TripChangeModal({ request, onClose, onSave }) {
       setError('Travel end must be after travel start.');
       return;
     }
+    if (!stops.length) {
+      setError('Keep at least one destination.');
+      return;
+    }
     const deadline = form.get('responseDeadline');
     setSaving(true);
     const failure = await onSave({
+      ...(destinationsChanged ? { destinations: stops.map((stop) => ({ destination_id: stop.destination.id, nights: stop.nights ? Number(stop.nights) : null })) } : {}),
       travel_start_date: dateMode === 'exact' ? startDate : null,
       travel_end_date: dateMode === 'exact' ? endDate : null,
       travel_month: dateMode === 'month' ? form.get('travelMonth') : null,
@@ -883,6 +947,10 @@ function TripChangeModal({ request, onClose, onSave }) {
         <p className="modal-copy">Matched sellers are notified. Offers already received must be re-confirmed or revised by the seller before you can award them.</p>
         {!reference ? <div className="empty-state">Loading request options...</div> : (
           <form className="request-form" onSubmit={submit}>
+            {isHotelOnly
+              ? <DestinationPicker label="Destination" value={stops.map((stop) => stop.destination)} onChange={(chosen) => setStops(chosen.map((destination) => ({ destination, nights: '' })))} kinds={reference.limits.hotelLeadAllowedDestinationKinds ?? []} />
+              : <StopsEditor stops={stops} onChange={setStops} max={reference.limits.maxRequestDestinations ?? 1} />}
+            {destinationsChanged && <p className="table-secondary">Changing the destination re-routes the lead: sellers outside the new area lose access unless they already sent an offer, and sellers in the new area are alerted. The lead type stays {labelFor(reference.requirementTypes, request.requirementType)}.</p>}
             <div className="request-form-grid"><label className="field-label">Date mode<select className="form-select" value={dateMode} onChange={(event) => setDateMode(event.target.value)}><option value="exact">Exact dates</option><option value="month">Month and nights</option></select></label>{dateMode === 'exact' ? <><label className="field-label">Arrival<input className="form-input" name="travelStartDate" type="date" min={format(now, 'yyyy-MM-dd')} defaultValue={request.travelStartDate ?? ''} required /></label><label className="field-label">Departure<input className="form-input" name="travelEndDate" type="date" min={format(now, 'yyyy-MM-dd')} defaultValue={request.travelEndDate ?? ''} required /></label></> : <><label className="field-label">Travel month<input className="form-input" name="travelMonth" type="month" min={format(now, 'yyyy-MM')} defaultValue={request.travelMonth ?? ''} required /></label><label className="field-label">Nights<input className="form-input" name="nights" type="number" min="1" max="90" defaultValue={request.nights} required /></label></>}
               <label className="field-label">Adults<input className="form-input" name="adults" type="number" min="1" max="100" defaultValue={request.adults} required /></label><label className="field-label">Children<input className="form-input" name="children" type="number" min="0" max="80" defaultValue={request.children} /></label><label className="field-label">Infants<input className="form-input" name="infants" type="number" min="0" max="40" defaultValue={request.infants} /></label><label className="field-label">Rooms<input className="form-input" name="roomCount" type="number" min="1" max="50" defaultValue={request.roomCount ?? ''} /></label></div>
             <label className="field-label">{needsExtension ? 'New response deadline (required: sellers need time to re-confirm)' : 'Extend response deadline (optional)'}<input className="form-input" name="responseDeadline" type="datetime-local" required={needsExtension} min={format(earliestDeadline, deadlineInputFormat)} max={format(addDays(now, deadlineLimits.maxDays), deadlineInputFormat)} /></label>
@@ -1019,7 +1087,7 @@ function OfferOptionList({ offer, reference, canAward, onAward }) {
         return (
           <li key={option.id}>
             <span><strong>{option.label}</strong> {[...details, option.notes].filter(Boolean).join(' / ')}</span>
-            <span>{formatOfferPrice({ ...offer, ...option })}{option.perTravellerMinor != null ? ` (${formatMinor(option.perTravellerMinor, offer.currency)} per traveller)` : ''}</span>
+            <span>{option.comparisonTotalMinor != null ? formatMinor(option.comparisonTotalMinor, offer.comparisonCurrency) : formatOfferPrice({ ...offer, ...option })}{option.comparisonPerTravellerMinor != null ? ` (${formatMinor(option.comparisonPerTravellerMinor, offer.comparisonCurrency)} per traveller)` : ''}</span>
             {canAward && <button className="secondary-button" disabled={offer.needsReconfirmation} onClick={() => onAward(option)}>Award this option</button>}
           </li>
         );
@@ -1141,7 +1209,7 @@ function RequestTable({ requests, compact = false, onOpenRequest }) {
             <tr key={request.id}>
               <td><div className="destination-cell">
                 {request.image ? <img src={request.image} alt="" loading="lazy" /> : <span className="destination-placeholder"><MapPin size={16} /></span>}
-                <span><strong>{request.destination}</strong><small>{request.requestCode ?? request.id} <span className="dot-separator">/</span> {request.country ?? request.destinationCountry}</small></span>
+                <span><strong>{request.destinations?.length > 1 ? routeText(request.destinations) : request.destination}</strong><small>{request.requestCode ?? request.id} <span className="dot-separator">/</span> {request.country ?? request.destinationCountry}</small></span>
               </div></td>
               <td><span className="table-primary">{request.dates}</span><small className="table-secondary">{request.deadline}</small></td>
               <td><span className="table-primary">{request.travelers}</span></td>

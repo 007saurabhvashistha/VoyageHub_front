@@ -109,6 +109,10 @@ export function listRequestOffers(requestId) {
   return request(`/v1/marketplace/requests/${requestId}/offers`);
 }
 
+export function setMarketplaceOfferShortlisted(offerId, shortlisted) {
+  return request(`/v1/marketplace/offers/${offerId}/shortlist`, { method: 'POST', body: JSON.stringify({ shortlisted }) }, true);
+}
+
 export function submitDmcOffer(requestId, offer) {
   return request(`/v1/marketplace/requests/${requestId}/offers`, { method: 'POST', body: JSON.stringify(offer) }, true);
 }
@@ -278,6 +282,10 @@ export function getReferenceData() {
   return request('/v1/reference-data');
 }
 
+export function getRegistrationCountries() {
+  return request('/v1/reference-data/countries');
+}
+
 export function listTeamMembers() {
   return request('/v1/organization/members');
 }
@@ -349,10 +357,74 @@ export function searchDestinations(query, { kinds = [], country = '' } = {}) {
   return request(`/v1/reference-data/destinations?${params}`);
 }
 
-export function listAdminDestinations({ q = '', country = '', kind = '' } = {}) {
+export function getDestinationCountries() {
+  return request('/v1/reference-data/destination-countries');
+}
+
+export function getDestinationChildren(destinationId) {
+  return request(`/v1/reference-data/destinations/${destinationId}/children`);
+}
+
+export function previewLeadAudience(lead) {
+  return request('/v1/marketplace/requests/audience-preview', { method: 'POST', body: JSON.stringify(lead) }, true);
+}
+
+export function repostRequest(requestId, { requirementType = null, cancelOriginal = false } = {}) {
+  return request(`/v1/marketplace/requests/${requestId}/repost`, { method: 'POST', body: JSON.stringify({ ...(requirementType ? { requirement_type: requirementType } : {}), cancel_original: cancelOriginal }) }, true);
+}
+
+export function listHotelProperties() {
+  return request('/v1/hotel-properties');
+}
+
+export function createHotelProperty(property) {
+  return request('/v1/hotel-properties', { method: 'POST', body: JSON.stringify(property) }, true);
+}
+
+export function updateHotelProperty(propertyId, changes) {
+  return request(`/v1/hotel-properties/${propertyId}`, { method: 'PATCH', body: JSON.stringify(changes) }, true);
+}
+
+export function getAlertPreferences() {
+  return request('/v1/alert-preferences');
+}
+
+export function saveAlertPreferences(preferences) {
+  return request('/v1/alert-preferences', { method: 'PUT', body: JSON.stringify(preferences) }, true);
+}
+
+export function listPendingHotelProperties() {
+  return request('/v1/admin/hotel-properties/pending');
+}
+
+export function decideHotelProperty(propertyId, decision, reason) {
+  return request(`/v1/admin/hotel-properties/${propertyId}/decision`, { method: 'POST', body: JSON.stringify({ decision, reason }) }, true);
+}
+
+export function getAdminDestination(destinationId) {
+  return request(`/v1/admin/destinations/${destinationId}`);
+}
+
+export function getDestinationLevels(countryCode) {
+  return request(`/v1/admin/destination-levels?country=${encodeURIComponent(countryCode)}`);
+}
+
+export function saveDestinationLevels(countryCode, levels) {
+  return request(`/v1/admin/destination-levels/${encodeURIComponent(countryCode)}`, { method: 'PUT', body: JSON.stringify({ levels }) }, true);
+}
+
+export function importFeaturedDestinations(file, countryCode = '') {
+  const form = new FormData();
+  form.append('file', file);
+  if (countryCode) form.append('country_code', countryCode);
+  return request('/v1/admin/destinations/featured-import', { method: 'POST', body: form }, true);
+}
+
+export function listAdminDestinations({ q = '', country = '', kind = '', featured = false } = {}) {
   const params = new URLSearchParams({ q });
   if (country) params.set('country', country);
   if (kind) params.set('kind', kind);
+  if (featured) params.set('featured', 'true');
   return request(`/v1/admin/destinations?${params}`);
 }
 

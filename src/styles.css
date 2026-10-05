@@ -270,6 +270,44 @@ h2 { margin-bottom: 0; font-size: 16px; font-weight: 700; line-height: 1.3; }
 .destination-result { width: 100%; border: 0; background: none; text-align: left; cursor: pointer; }
 .destination-result:disabled { opacity: .5; cursor: default; }
 .destination-result svg { flex: none; margin-top: 2px; color: var(--teal); }
+.destination-results { margin: 0; padding: 0; list-style: none; }
+.destination-result { cursor: pointer; }
+.destination-result.highlighted { background: var(--teal-soft); }
+.requirement-picker { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 8px; margin: 0 0 8px; padding: 10px; border: 1px solid var(--line); border-radius: 6px; }
+.requirement-picker legend { font-size: 11px; font-weight: 700; }
+.requirement-option { display: grid; gap: 3px; padding: 10px; border: 1px solid var(--line-strong); border-radius: 6px; cursor: pointer; font-size: 11px; }
+.requirement-option input { accent-color: var(--teal); }
+.requirement-option.selected { border-color: var(--teal); background: var(--teal-soft); }
+.requirement-option small { color: var(--muted); }
+.stops-editor { display: grid; gap: 8px; }
+.stop-list { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.stop-row { display: grid; grid-template-columns: auto auto minmax(0, 1fr) 90px auto; align-items: center; gap: 8px; padding: 6px 8px; background: var(--white); border: 1px solid var(--line); border-radius: 6px; font-size: 11px; }
+.stop-row .drag-handle { cursor: grab; touch-action: none; }
+.stop-index { display: grid; width: 20px; height: 20px; place-items: center; color: var(--white); background: var(--navy); border-radius: 50%; font-size: 10px; }
+.stop-name { display: grid; min-width: 0; }
+.stop-name small { overflow: hidden; color: var(--muted); text-overflow: ellipsis; white-space: nowrap; }
+.stop-nights { display: grid; gap: 2px; color: var(--muted); font-size: 10px; }
+.audience-preview { display: flex; align-items: center; gap: 6px; margin: 4px 0; color: var(--sky); font-size: 11px; }
+.lead-badges { display: flex; flex-wrap: wrap; gap: 5px; margin: 5px 0; }
+.lead-badge { display: inline-flex; align-items: center; gap: 4px; padding: 2px 7px; color: #46525E; background: #F0F2F4; border-radius: 999px; font-size: 10px; font-weight: 600; }
+.lead-badge.type-hotel_only { color: #7A4E00; background: #FFF4DE; }
+.lead-badge.type-itinerary { color: #28786F; background: var(--teal-soft); }
+.lead-badge.match-partial { color: #8A5A00; background: #FFF1D6; }
+.lead-badge.match-invited { color: var(--sky); background: #E8F1F7; }
+.coverage-editor { display: grid; gap: 8px; margin: 8px 0 0; padding: 10px; border: 1px solid var(--line); border-radius: 6px; }
+.coverage-chip.exclude { color: #A23B44; background: #FDECEE; }
+.coverage-tree { max-height: 340px; overflow-y: auto; padding: 6px; border: 1px solid var(--line); border-radius: 6px; font-size: 11px; }
+.coverage-node { display: inline-flex; align-items: center; gap: 10px; }
+.coverage-node > span:first-child { display: inline-flex; align-items: baseline; gap: 6px; }
+.coverage-node small { color: var(--muted); font-size: 9px; }
+.coverage-node.include > span:first-child { color: #28786F; font-weight: 700; }
+.coverage-node.exclude > span:first-child { color: #A23B44; text-decoration: line-through; }
+.coverage-node-actions { display: inline-flex; gap: 3px; }
+.coverage-toggle { display: inline-grid; width: 20px; height: 20px; place-items: center; padding: 0; color: var(--muted); background: var(--white); border: 1px solid var(--line-strong); border-radius: 4px; }
+.coverage-toggle.active { color: var(--white); background: var(--teal); border-color: var(--teal); }
+.coverage-toggle.exclude.active { background: var(--red); border-color: var(--red); }
+.hotel-properties { display: grid; gap: 10px; margin-top: 16px; }
+.hotel-property-form { padding: 12px; border: 1px dashed var(--line); border-radius: 6px; background: #F8FAFB; }
 .legal-links { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-left: auto; }
 .legal-links a { color: #77838E; font-size: 10px; text-decoration: none; }
 .legal-links a:hover { color: var(--sky); text-decoration: underline; }
@@ -342,6 +380,9 @@ h2 { margin-bottom: 0; font-size: 16px; font-weight: 700; line-height: 1.3; }
 .line-item-table td { padding: 3px 6px; border-bottom: 1px solid var(--line); }
 .comparison-price-block { display: grid; justify-items: end; gap: 2px; }
 .comparison-price-block small { color: #66727D; font-size: 10px; }
+.comparison-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 5px 8px; margin: 6px 0; }
+.comparison-meta strong { color: var(--navy); font-size: 12px; }
+.comparison-meta small { color: #66727D; font-size: 10px; }
 .report-link { display: inline-flex; align-items: center; gap: 4px; color: #8A4F4F; font-size: 11px; }
 .report-details, .moderation-note { min-height: 64px; resize: vertical; }
 .moderation-details { margin: 6px 0; font-size: 12px; }

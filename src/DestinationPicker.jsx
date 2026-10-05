@@ -1,18 +1,19 @@
 import { useEffect, useState } from 'react';
-import { MapPin, Search, X } from 'lucide-react';
+import { useCombobox } from 'downshift';
+import { MapPin, Search, Star, X } from 'lucide-react';
 import { searchDestinations } from './api.js';
-import { labelFor, useReferenceData } from './referenceData.js';
 
 const searchDelayMs = 250;
 
-export function DestinationPicker({ label, value, onChange, multiple = false, kinds = [], max = 1, placeholder = 'Search city, region or country' }) {
-  const { data: reference } = useReferenceData();
+// Accessible destination search (downshift); results are ranked server-side (exact, featured, popular, population).
+export function DestinationPicker({ label, value, onChange, multiple = false, kinds = [], max = 1, placeholder = 'Search a place, district or region' }) {
   const [query, setQuery] = useState('');
   const [results, setResults] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const kindsKey = kinds.join(',');
   const limit = multiple ? max : 1;
+  const selectedIds = new Set(value.map((item) => item.id));
 
   useEffect(() => {
     const term = query.trim();
@@ -32,26 +33,40 @@ export function DestinationPicker({ label, value, onChange, multiple = false, ki
     return () => { active = false; window.clearTimeout(timeout); };
   }, [query, kindsKey]);
 
-  const selectedIds = new Set(value.map((item) => item.id));
-  function choose(destination) {
-    if (selectedIds.has(destination.id)) return;
-    onChange(multiple ? [...value, destination].slice(0, limit) : [destination]);
-    setQuery('');
-  }
+  const items = results.filter((destination) => !selectedIds.has(destination.id));
+  const { isOpen, getLabelProps, getMenuProps, getInputProps, getItemProps, highlightedIndex } = useCombobox({
+    items,
+    inputValue: query,
+    itemToString: (item) => item?.label ?? '',
+    onInputValueChange: ({ inputValue, type }) => {
+      if (type !== useCombobox.stateChangeTypes.ItemClick && type !== useCombobox.stateChangeTypes.InputKeyDownEnter) setQuery(inputValue ?? '');
+    },
+    onSelectedItemChange: ({ selectedItem }) => {
+      if (!selectedItem) return;
+      onChange(multiple ? [...value, selectedItem].slice(0, limit) : [selectedItem]);
+      setQuery('');
+    },
+    selectedItem: null,
+  });
 
   return (
     <fieldset className="invite-picker destination-picker">
-      <legend>{label}{multiple ? ` (${value.length}/${limit})` : ''}</legend>
+      <legend {...getLabelProps()}>{label}{multiple ? ` (${value.length}/${limit})` : ''}</legend>
       {value.length > 0 && <div className="invite-chips">{value.map((destination) => <button type="button" key={destination.id} className="invite-chip" onClick={() => onChange(value.filter((item) => item.id !== destination.id))} aria-label={`Remove ${destination.label}`}><MapPin size={12} />{destination.label}<X size={12} /></button>)}</div>}
-      {value.length < limit && <label className="search-field"><Search size={16} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={placeholder} aria-label={label} /></label>}
+      <div className={value.length < limit ? '' : 'visually-hidden'}>
+        <label className="search-field"><Search size={16} /><input {...getInputProps({ placeholder, disabled: value.length >= limit })} /></label>
+      </div>
       {error && <p className="auth-error" role="alert">{error}</p>}
-      {query.trim() && <div className="invite-results" role="listbox">
-        {loading ? <small className="table-secondary">Searching destinations...</small> : results.length ? results.map((destination) => (
-          <button type="button" role="option" aria-selected={selectedIds.has(destination.id)} key={destination.id} className="invite-result destination-result" onClick={() => choose(destination)} disabled={selectedIds.has(destination.id)}>
-            <MapPin size={14} /><span><strong>{destination.name}</strong><small>{labelFor(reference?.destinationKinds, destination.kind)}{destination.kind === 'country' ? '' : ` / ${destination.label.slice(destination.name.length + 2)}`}</small></span>
-          </button>
-        )) : <small className="table-secondary">No matching destination. Ask platform support to add it.</small>}
-      </div>}
+      <ul className={`invite-results destination-results ${isOpen && query.trim() ? '' : 'visually-hidden'}`} {...getMenuProps()}>
+        {isOpen && query.trim() && (loading
+          ? <li className="table-secondary">Searching destinations...</li>
+          : items.length ? items.map((destination, index) => (
+            <li key={destination.id} className={`invite-result destination-result ${highlightedIndex === index ? 'highlighted' : ''}`} {...getItemProps({ item: destination, index })}>
+              {destination.featured ? <Star size={14} /> : <MapPin size={14} />}
+              <span><strong>{destination.name}</strong><small>{destination.kindLabel}{destination.kind === 'country' ? '' : ` / ${destination.label.slice(destination.name.length + 2)}`}</small></span>
+            </li>
+          )) : <li className="table-secondary">No destinations match this search.</li>)}
+      </ul>
     </fieldset>
   );
 }
