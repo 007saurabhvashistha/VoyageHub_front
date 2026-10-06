@@ -365,7 +365,7 @@ h2 { margin-bottom: 0; font-size: 16px; font-weight: 700; line-height: 1.3; }
 .webhook-help code { font-size: 11px; }
 @media (max-width: 720px) { .webhook-form { grid-template-columns: 1fr; } }
 @media (max-width: 720px) { .team-invite-form, .team-activity li { grid-template-columns: 1fr; } }
-.offer-form-modal { max-width: 760px; }
+.offer-form-modal { max-width: 760px; max-height: calc(100vh - 40px); max-height: calc(100dvh - 40px); overflow-y: auto; overscroll-behavior: contain; }
 .line-item-editor { display: grid; gap: 6px; margin: 10px 0 0; padding: 10px; border: 1px solid var(--line); border-radius: 6px; }
 .line-item-editor legend { padding: 0 4px; color: #64717C; font-size: 10px; font-weight: 700; }
 .line-item-row { display: grid; grid-template-columns: 120px minmax(0, 1fr) 64px 110px 100px auto; align-items: center; gap: 6px; }

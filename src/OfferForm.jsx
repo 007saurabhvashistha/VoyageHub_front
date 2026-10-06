@@ -33,6 +33,12 @@ export function OfferFormModal({ role, target, roomTypes = [], onClose, onSubmit
     return () => { active = false; };
   }, [target.reviseOfferId]);
 
+  useEffect(() => {
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => { document.body.style.overflow = previousOverflow; };
+  }, []);
+
   async function removeExisting(attachment) {
     try {
       await removeAttachment(attachment.id);
