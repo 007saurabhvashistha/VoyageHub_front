@@ -52,9 +52,9 @@ export function StopsEditor({ stops, onChange, max }) {
 }
 
 // "About N sellers will be alerted" before publishing; counts only, never names.
-export function AudiencePreview({ requirementType, destinationIds, hotelCategory }) {
+export function AudiencePreview({ requirementType, destinationIds, hotelCategory, facts = {} }) {
   const [preview, setPreview] = useState(null);
-  const key = `${requirementType}|${destinationIds.join(',')}|${hotelCategory ?? ''}`;
+  const key = JSON.stringify([requirementType, destinationIds, hotelCategory, facts]);
   useEffect(() => {
     if (!requirementType || !destinationIds.length) {
       setPreview(null);
@@ -62,7 +62,12 @@ export function AudiencePreview({ requirementType, destinationIds, hotelCategory
     }
     let active = true;
     const timeout = window.setTimeout(() => {
-      previewLeadAudience({ requirement_type: requirementType, destinations: destinationIds.map((id) => ({ destination_id: id })), hotel_category: hotelCategory || null })
+      previewLeadAudience({
+        requirement_type: requirementType,
+        destinations: destinationIds.map((id) => ({ destination_id: id })),
+        hotel_category: hotelCategory || null,
+        ...facts,
+      })
         .then((result) => active && setPreview(result))
         .catch(() => active && setPreview(null));
     }, previewDelayMs);
@@ -92,8 +97,10 @@ export function LeadBadges({ request }) {
     <div className="lead-badges">
       {request.requirementType && <span className={`lead-badge type-${request.requirementType}`}><TypeIcon size={12} />{labelFor(reference?.requirementTypes, request.requirementType)}</span>}
       {request.destinations?.length > 1 && <span className="lead-badge"><Route size={12} />{route}</span>}
+      {request.childAges?.length > 0 && <span className="lead-badge">Child ages: {request.childAges.join(', ')}</span>}
       {request.matchType && request.matchType !== 'full' && <span className={`lead-badge match-${request.matchType}`}>{labelFor(reference?.matchTypes, request.matchType)}</span>}
       {request.matchingProperties?.length > 0 && <span className="lead-badge"><BedDouble size={12} />{request.matchingProperties.map((property) => property.name).join(', ')}</span>}
+      {request.specialRequests && <p className="lead-special-requests"><strong>Special requests:</strong> {request.specialRequests}</p>}
     </div>
   );
 }

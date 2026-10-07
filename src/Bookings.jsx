@@ -4,12 +4,16 @@ import {
   confirmBooking,
   confirmBookingReference,
   answerBookingChange,
+  addBookingDisputeEvidence,
   correctGuestDetails,
   createVoucherDownloadUrl,
   getBooking,
+  getBookingTrust,
   getGuestAccessLog,
   getGuestDetails,
   listBookings,
+  openBookingDispute,
+  rateBookingParty,
   restoreGuestDetails,
   revokeGuestDetails,
   uploadBookingVoucher,
@@ -158,6 +162,7 @@ function BookingDetailModal({ bookingId, onClose, onChanged }) {
               <div><dt>Status</dt><dd><span className={`status-pill ${statusPill[booking.status]}`}><i />{labelFor(reference?.bookingStatuses, booking.status)}</span></dd></div>
               <div><dt>Travel</dt><dd>{travelText(booking)}</dd></div>
               <div><dt>Travellers</dt><dd>{guestSummary(booking)}{booking.roomingRequired ? ` / ${booking.roomCount} room(s), ${booking.offer.roomType}` : ''}</dd></div>
+              {booking.roomingRequired && <div><dt>Room hold</dt><dd>{booking.roomHold ? `${labelFor(reference?.hotelRoomHoldStatuses, booking.roomHold.status)}${booking.roomHold.expiresAt ? ` / expires ${new Date(booking.roomHold.expiresAt).toLocaleString()}` : ''}` : 'No date-specific inventory was configured for this hotel.'}</dd></div>}
               {booking.offer.optionLabel && <div><dt>Awarded option</dt><dd>{booking.offer.optionLabel}{booking.offer.hotelCategory ? ` / ${labelFor(reference?.hotelCategories, booking.offer.hotelCategory)}` : ''}</dd></div>}
               <div><dt>Booking reference</dt><dd>{booking.sellerConfirmationNumber ? `${booking.sellerConfirmationNumber}${booking.sellerConfirmationNote ? ` (${booking.sellerConfirmationNote})` : ''}` : 'Not confirmed by the seller yet'}</dd></div>
               <div><dt>Guest details</dt><dd>{guestDetailsState(booking)}{guest && !guest.purgedAt ? ` / deleted on ${guest.deletionDueOn}` : ''}</dd></div>
@@ -192,6 +197,7 @@ function BookingDetailModal({ bookingId, onClose, onChanged }) {
             {accessLog && <AccessLog entries={accessLog} reference={reference} />}
 
             <BookingChanges booking={booking} reference={reference} canManage={canManage} busy={busy} onRun={run} />
+            <AfterTripFeedback booking={booking} />
 
             {!isAgency && canManage && confirmed && <SellerConfirmation booking={booking} busy={busy} onSubmit={(number, note) => run(() => confirmBookingReference(bookingId, number, note))} />}
             <Vouchers booking={booking} canManage={canManage} onError={setError} onUploaded={async () => setBooking((await getBooking(bookingId)).booking)} />
@@ -201,6 +207,72 @@ function BookingDetailModal({ bookingId, onClose, onChanged }) {
         ))}
       </section>
     </div>
+  );
+}
+
+function AfterTripFeedback({ booking }) {
+  const { data: reference } = useReferenceData();
+  const [trust, setTrust] = useState(null);
+  const [rating, setRating] = useState('');
+  const [category, setCategory] = useState('');
+  const [summary, setSummary] = useState('');
+  const [evidence, setEvidence] = useState('');
+  const [additionalEvidence, setAdditionalEvidence] = useState('');
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  async function refresh() {
+    setTrust(await getBookingTrust(booking.id));
+  }
+
+  useEffect(() => { refresh().catch((requestError) => setError(requestError.message)); }, [booking.id]);
+
+  async function submit(action) {
+    setBusy(true);
+    setError('');
+    try {
+      await action();
+      await refresh();
+      setSummary('');
+      setEvidence('');
+      setAdditionalEvidence('');
+    } catch (requestError) {
+      setError(requestError.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (!trust || booking.status === 'cancelled') return null;
+  const dispute = trust.dispute;
+  const canAddEvidence = dispute && ['open', 'in_review'].includes(dispute.status);
+
+  return (
+    <section className="booking-change-section after-trip-feedback">
+      <div className="section-heading"><div><p className="eyebrow">AFTER THE TRIP</p><h3>Rating and problem report</h3></div></div>
+      {trust.counterpartyRating.count > 0 && <p className="privacy-note">Counterparty rating: {trust.counterpartyRating.average} / 5 from {trust.counterpartyRating.count} booking{trust.counterpartyRating.count === 1 ? '' : 's'}.</p>}
+      {trust.otherReview && <p className="privacy-note">The other party rated this booking {trust.otherReview.rating} / 5.</p>}
+      {trust.ownReview && <p className="privacy-note">Your rating: {trust.ownReview.rating} / 5.</p>}
+      {trust.canReview ? <form className="booking-change-form" onSubmit={(event) => { event.preventDefault(); submit(() => rateBookingParty(booking.id, Number(rating || reference?.bookingRatingScale.maximum))); }}>
+        <label className="field-label">Rate this booking<select className="form-select" value={rating || reference?.bookingRatingScale.maximum || ''} onChange={(event) => setRating(event.target.value)}>{reference?.bookingRatingScale && Array.from({ length: reference.bookingRatingScale.maximum - reference.bookingRatingScale.minimum + 1 }, (_, index) => reference.bookingRatingScale.maximum - index).map((value) => <option key={value} value={value}>{value} / {reference.bookingRatingScale.maximum}</option>)}</select></label>
+        <div className="modal-actions"><button className="primary-button" disabled={busy || !reference?.bookingRatingScale}>Submit rating</button></div>
+      </form> : !trust.eligible && <p className="privacy-note">Ratings and problem reports open after the confirmed trip ends ({trust.tripEndDate}).</p>}
+      {dispute ? <>
+        <div className="booking-change-heading"><strong>{dispute.category}: {dispute.summary}</strong><span className={`status-pill ${dispute.status === 'resolved' ? 'open' : dispute.status === 'rejected' ? 'cancelled' : 'draft'}`}><i />{dispute.status.replace('_', ' ')}</span></div>
+        <ol className="booking-change-list">{dispute.timeline.map((event) => <li key={event.id}><strong>{event.type.replaceAll('_', ' ')}</strong><p>{event.message}</p><time>{new Date(event.createdAt).toLocaleString()}</time></li>)}</ol>
+        {canAddEvidence && <form className="booking-change-form" onSubmit={(event) => { event.preventDefault(); submit(() => addBookingDisputeEvidence(dispute.id, additionalEvidence)); }}>
+          <label className="field-label">Add evidence or a timeline update<textarea className="form-input" value={additionalEvidence} onChange={(event) => setAdditionalEvidence(event.target.value)} minLength="10" maxLength="2000" required /></label>
+          <div className="modal-actions"><button className="secondary-button" disabled={busy || additionalEvidence.trim().length < 10}>Add to case</button></div>
+        </form>}
+        {dispute.resolutionNote && <p className="privacy-note">Decision: {dispute.resolutionNote}</p>}
+      </> : trust.eligible && <form className="booking-change-form" onSubmit={(event) => { event.preventDefault(); submit(() => openBookingDispute(booking.id, { category, summary, evidence })); }}>
+        <label className="field-label">Problem category<input className="form-input" value={category} onChange={(event) => setCategory(event.target.value)} minLength="2" maxLength="32" required /></label>
+        <label className="field-label">What went wrong?<textarea className="form-input" value={summary} onChange={(event) => setSummary(event.target.value)} minLength="10" maxLength="200" required /></label>
+        <label className="field-label">Evidence or supporting details<textarea className="form-input" value={evidence} onChange={(event) => setEvidence(event.target.value)} minLength="10" maxLength="2000" required /></label>
+        <div className="modal-actions"><button className="secondary-button" disabled={busy || summary.trim().length < 10 || evidence.trim().length < 10}>Report a problem</button></div>
+      </form>}
+      {error && <p className="auth-error" role="alert">{error}</p>}
+    </section>
   );
 }
 

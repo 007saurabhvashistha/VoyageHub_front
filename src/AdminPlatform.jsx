@@ -18,13 +18,14 @@ export function AdminSettings() {
 
   function apply(result) {
     setSettings(result.settings);
-    setInputs(Object.fromEntries(result.settings.map((setting) => [setting.key, setting.type === 'list' ? setting.value.join(', ') : String(setting.value)])));
+    setInputs(Object.fromEntries(result.settings.map((setting) => [setting.key, setting.type === 'list' ? setting.value.join(', ') : setting.type === 'boolean' ? setting.value : String(setting.value)])));
   }
 
   useEffect(() => { getPlatformSettings().then(apply).catch((requestError) => setError(requestError.message)); }, []);
 
   const parsed = (setting) => setting.type === 'list'
     ? (inputs[setting.key] ?? '').split(',').map((item) => item.trim()).filter(Boolean)
+    : setting.type === 'boolean' ? Boolean(inputs[setting.key])
     : Number(inputs[setting.key]);
   const unchanged = (setting) => JSON.stringify(parsed(setting)) === JSON.stringify(setting.value);
 
@@ -54,9 +55,11 @@ export function AdminSettings() {
             <label className="field-label" htmlFor={`setting-${setting.key}`}><SlidersHorizontal size={14} />{setting.label}{setting.unit ? ` (${setting.unit})` : ''}</label>
             {setting.type === 'list'
               ? <input id={`setting-${setting.key}`} className="form-input" value={inputs[setting.key] ?? ''} onChange={(event) => setInputs((current) => ({ ...current, [setting.key]: event.target.value }))} placeholder={setting.options ? setting.options.join(', ') : 'Comma separated'} />
-              : <input id={`setting-${setting.key}`} className="form-input" type="number" min={setting.min} max={setting.max} step="1" value={inputs[setting.key] ?? ''} onChange={(event) => setInputs((current) => ({ ...current, [setting.key]: event.target.value }))} required />}
+              : setting.type === 'boolean'
+                ? <div className="admin-feature-toggle"><input id={`setting-${setting.key}`} type="checkbox" role="switch" aria-label={setting.label} checked={Boolean(inputs[setting.key])} onChange={(event) => setInputs((current) => ({ ...current, [setting.key]: event.target.checked }))} /><span>{inputs[setting.key] ? 'Enabled' : 'Disabled'}</span></div>
+                : <input id={`setting-${setting.key}`} className="form-input" type="number" min={setting.min} max={setting.max} step="1" value={inputs[setting.key] ?? ''} onChange={(event) => setInputs((current) => ({ ...current, [setting.key]: event.target.value }))} required />}
             <button className="primary-button" disabled={saving === setting.key || unchanged(setting)}>{saving === setting.key ? 'Saving...' : 'Save'}</button>
-            <small>{setting.description}{setting.options ? ` Allowed: ${setting.options.join(', ')}.` : ''} Current {setting.type === 'list' ? setting.value.join(', ') || 'none' : setting.value}{setting.updatedAt ? ` / updated ${new Date(setting.updatedAt).toLocaleString()}` : ` / default ${setting.type === 'list' ? setting.defaultValue.join(', ') || 'none' : setting.defaultValue}`}</small>
+            <small>{setting.description}{setting.options ? ` Allowed: ${setting.options.join(', ')}.` : ''} Current {setting.type === 'list' ? setting.value.join(', ') || 'none' : setting.type === 'boolean' ? setting.value ? 'enabled' : 'disabled' : setting.value}{setting.updatedAt ? ` / updated ${new Date(setting.updatedAt).toLocaleString()}` : ` / default ${setting.type === 'list' ? setting.defaultValue.join(', ') || 'none' : setting.type === 'boolean' ? setting.defaultValue ? 'enabled' : 'disabled' : setting.defaultValue}`}</small>
           </form>
         )) : <div className="empty-state">Loading platform settings...</div>}
       </section>

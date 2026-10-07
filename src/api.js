@@ -80,6 +80,28 @@ export function getCurrentSession() {
   return request('/v1/auth/me');
 }
 
+export function listAuthSessions() {
+  return request('/v1/auth/sessions');
+}
+
+export function revokeAuthSession(sessionId) {
+  return request(`/v1/auth/sessions/${sessionId}`, { method: 'DELETE' }, true);
+}
+
+export async function signOutEverywhere() {
+  const result = await request('/v1/auth/sessions/sign-out-everywhere', { method: 'POST', body: JSON.stringify({}) }, true);
+  csrfToken = '';
+  return result;
+}
+
+export function listOrganizations() {
+  return request('/v1/auth/organizations');
+}
+
+export function switchOrganization(organizationId) {
+  return request(`/v1/auth/organizations/${organizationId}/switch`, { method: 'POST', body: JSON.stringify({}) }, true);
+}
+
 export async function logoutAccount() {
   await request('/v1/auth/logout', { method: 'POST' }, true);
   csrfToken = '';
@@ -109,6 +131,10 @@ export function listRequestOffers(requestId) {
   return request(`/v1/marketplace/requests/${requestId}/offers`);
 }
 
+export function exportOfferToAviatCrm(offerId, payload) {
+  return request(`/v1/marketplace/offers/${offerId}/export/aviat-crm`, { method: 'POST', body: JSON.stringify(payload) }, true);
+}
+
 export function setMarketplaceOfferShortlisted(offerId, shortlisted) {
   return request(`/v1/marketplace/offers/${offerId}/shortlist`, { method: 'POST', body: JSON.stringify({ shortlisted }) }, true);
 }
@@ -119,6 +145,18 @@ export function submitDmcOffer(requestId, offer) {
 
 export function submitHotelOffer(requestId, offer) {
   return request(`/v1/marketplace/requests/${requestId}/offers`, { method: 'POST', body: JSON.stringify(offer) }, true);
+}
+
+export function listDmcOfferLibrary() {
+  return request('/v1/marketplace/offer-library');
+}
+
+export function saveDmcOfferLibraryItem(item) {
+  return request('/v1/marketplace/offer-library', { method: 'POST', body: JSON.stringify(item) }, true);
+}
+
+export function deleteDmcOfferLibraryItem(itemId) {
+  return request(`/v1/marketplace/offer-library/${itemId}`, { method: 'DELETE', body: JSON.stringify({}) }, true);
 }
 
 export function awardMarketplaceOffer(requestId, selections, notSelectedReason = '') {
@@ -181,9 +219,21 @@ export function updateSellerProfile(profile) {
   return request('/v1/auth/profile', { method: 'PUT', body: JSON.stringify(profile) }, true);
 }
 
-export function listMarketplaceSuppliers({ search = '', country = '', limit = 25, offset = 0 } = {}) {
+export function listMarketplaceSuppliers({ search = '', country = '', limit = 25, offset = 0, favoritesOnly = false } = {}) {
   const query = new URLSearchParams({ search, country, limit: String(limit), offset: String(offset) });
+  if (favoritesOnly) query.set('favorites_only', 'true');
   return request(`/v1/marketplace/suppliers?${query}`);
+}
+
+export function listPreferredSuppliers() {
+  return request('/v1/marketplace/suppliers/favorites');
+}
+
+export function setPreferredSupplier(organizationId, preferred) {
+  return request(`/v1/marketplace/suppliers/${organizationId}/favorite`, {
+    method: preferred ? 'POST' : 'DELETE',
+    ...(preferred ? { body: JSON.stringify({}) } : {}),
+  }, true);
 }
 
 export function getRequestMessages(requestId, { sellerOrganizationId = '', limit = 100, offset = 0 } = {}) {
@@ -220,6 +270,22 @@ export function markAllNotificationsRead() {
   return request('/v1/notifications/read-all', { method: 'POST', body: JSON.stringify({}) }, true);
 }
 
+export function getNotificationPreferences() {
+  return request('/v1/notifications/preferences');
+}
+
+export function saveNotificationPreferences(preferences) {
+  return request('/v1/notifications/preferences', { method: 'PUT', body: JSON.stringify(preferences) }, true);
+}
+
+export function getAdminDisputes(status = 'open') {
+  return request(`/v1/admin/disputes?status=${encodeURIComponent(status)}`);
+}
+
+export function decideBookingDispute(disputeId, status, note) {
+  return request(`/v1/admin/disputes/${disputeId}/decision`, { method: 'POST', body: JSON.stringify({ status, note }) }, true);
+}
+
 export function listPendingSellerProfiles() {
   return request('/v1/admin/seller-profiles/pending');
 }
@@ -235,9 +301,10 @@ export function getVerificationDocuments() {
   return request('/v1/verification-documents');
 }
 
-export function uploadVerificationDocument(documentType, file) {
+export function uploadVerificationDocument(documentType, file, expiresAt = '') {
   const body = new FormData();
   body.append('document_type', documentType);
+  if (expiresAt) body.append('expires_at', expiresAt);
   body.append('file', file);
   return request('/v1/verification-documents', { method: 'POST', body }, true);
 }
@@ -318,8 +385,8 @@ export function previewInvitation(token) {
   return request(`/v1/auth/invitations/preview?${new URLSearchParams({ token })}`);
 }
 
-export function acceptInvitation(token, fullName, password, acceptedLegalDocumentIds = []) {
-  return request('/v1/auth/invitations/accept', { method: 'POST', body: JSON.stringify({ token, full_name: fullName, password, accepted_legal_document_ids: acceptedLegalDocumentIds }) });
+export function acceptInvitation(token, fullName, password, acceptedLegalDocumentIds = [], authenticated = false) {
+  return request('/v1/auth/invitations/accept', { method: 'POST', body: JSON.stringify({ token, ...(fullName ? { full_name: fullName } : {}), ...(password ? { password } : {}), accepted_legal_document_ids: acceptedLegalDocumentIds }) }, authenticated);
 }
 
 export function createReport(targetType, targetId, category, details) {
@@ -383,6 +450,23 @@ export function createHotelProperty(property) {
 
 export function updateHotelProperty(propertyId, changes) {
   return request(`/v1/hotel-properties/${propertyId}`, { method: 'PATCH', body: JSON.stringify(changes) }, true);
+}
+
+export function uploadHotelPropertyPhoto(propertyId, file) {
+  const body = new FormData();
+  body.append('file', file);
+  return request(`/v1/hotel-properties/${propertyId}/photos`, { method: 'POST', body }, true);
+}
+
+export function createHotelPropertyPhotoUrl(propertyId, photoId) {
+  return request(`/v1/hotel-properties/${propertyId}/photos/${photoId}/download-url`, { method: 'POST', body: JSON.stringify({}) }, true);
+}
+
+export function deleteHotelPropertyPhoto(propertyId, photoId) {
+  return request(`/v1/hotel-properties/${propertyId}/photos/${photoId}`, { method: 'DELETE', body: JSON.stringify({}) }, true);
+}
+export function listHotelOfferPhotos(propertyId) {
+  return request(`/v1/marketplace/hotel-properties/${propertyId}/photos`);
 }
 
 export function getAlertPreferences() {
@@ -474,6 +558,14 @@ export function closeMarketplaceRequest(requestId) {
   return request(`/v1/marketplace/requests/${requestId}/close`, { method: 'POST', body: JSON.stringify({}) }, true);
 }
 
+export function extendMarketplaceRequestDeadline(requestId, change) {
+  return request(`/v1/marketplace/requests/${requestId}/deadline`, { method: 'PATCH', body: JSON.stringify(change) }, true);
+}
+
+export function cancelMarketplaceRequest(requestId, note = '') {
+  return request(`/v1/marketplace/requests/${requestId}/cancel`, { method: 'POST', body: JSON.stringify(note.trim() ? { note: note.trim() } : {}) }, true);
+}
+
 export function changeRequestTrip(requestId, trip) {
   return request(`/v1/marketplace/requests/${requestId}/trip`, { method: 'PATCH', body: JSON.stringify(trip) }, true);
 }
@@ -484,6 +576,10 @@ export function reconfirmMarketplaceOffer(offerId, tripVersion) {
 
 export function declineMarketplaceRequest(requestId, reason) {
   return request(`/v1/marketplace/requests/${requestId}/decline`, { method: 'POST', body: JSON.stringify({ reason }) }, true);
+}
+
+export function updateSellerSettings(settings) {
+  return request('/v1/marketplace/seller-settings', { method: 'PUT', body: JSON.stringify(settings) }, true);
 }
 
 export function getMarketplaceOffer(offerId) {
@@ -512,6 +608,22 @@ export function listBookings() {
 
 export function getBooking(awardId) {
   return request(`/v1/bookings/${awardId}`);
+}
+
+export function getBookingTrust(awardId) {
+  return request(`/v1/trust/bookings/${awardId}`);
+}
+
+export function rateBookingParty(awardId, rating) {
+  return request(`/v1/trust/bookings/${awardId}/reviews`, { method: 'POST', body: JSON.stringify({ rating }) }, true);
+}
+
+export function openBookingDispute(awardId, dispute) {
+  return request(`/v1/trust/bookings/${awardId}/disputes`, { method: 'POST', body: JSON.stringify(dispute) }, true);
+}
+
+export function addBookingDisputeEvidence(disputeId, evidence) {
+  return request(`/v1/trust/disputes/${disputeId}/evidence`, { method: 'POST', body: JSON.stringify({ evidence }) }, true);
 }
 
 export function requestBookingChange(awardId, change) {
@@ -552,6 +664,46 @@ export function getGuestAccessLog(awardId) {
 
 export function listWebhookEndpoints() {
   return request('/v1/webhooks/endpoints');
+}
+
+export function listApiTokens() {
+  return request('/v1/integrations/api-tokens');
+}
+
+export function createApiToken(name) {
+  return request('/v1/integrations/api-tokens', { method: 'POST', body: JSON.stringify({ name }) }, true);
+}
+
+export function revokeApiToken(tokenId) {
+  return request(`/v1/integrations/api-tokens/${tokenId}`, { method: 'DELETE' }, true);
+}
+
+function reportQuery(range) {
+  const params = new URLSearchParams();
+  if (range.from) params.set('from', range.from);
+  if (range.to) params.set('to', range.to);
+  const query = params.toString();
+  return query ? `?${query}` : '';
+}
+
+export function getAgencyReport(range = {}) {
+  return request(`/v1/reports/agency${reportQuery(range)}`);
+}
+
+export function getSellerPerformance(range = {}) {
+  return request(`/v1/reports/seller${reportQuery(range)}`);
+}
+
+export function getAdminMarketplaceAnalytics(range = {}) {
+  return request(`/v1/admin/analytics/marketplace${reportQuery(range)}`);
+}
+
+export function listAdminAuditEvents(filters = {}, { page = 1, limit = 50 } = {}) {
+  const params = new URLSearchParams({ page: String(page), limit: String(limit) });
+  for (const key of ['q', 'organizationId', 'source', 'action', 'from', 'to']) {
+    if (filters[key]) params.set(key, filters[key]);
+  }
+  return request(`/v1/admin/audit-events?${params}`);
 }
 
 export function createWebhookEndpoint(endpoint) {

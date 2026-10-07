@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Copy, KeyRound, Plus, RotateCcw, Send, Trash2, Webhook } from 'lucide-react';
-import { createWebhookEndpoint, deleteWebhookEndpoint, listWebhookDeliveries, listWebhookEndpoints, retryWebhookDelivery, rotateWebhookSecret, sendWebhookTest, updateWebhookEndpoint } from './api.js';
+import { createApiToken, createWebhookEndpoint, deleteWebhookEndpoint, listApiTokens, listWebhookDeliveries, listWebhookEndpoints, retryWebhookDelivery, revokeApiToken, rotateWebhookSecret, sendWebhookTest, updateWebhookEndpoint } from './api.js';
 import { labelFor, useReferenceData } from './referenceData.js';
 
 const deliveryStateClass = { delivered: 'open', pending: 'draft', processing: 'draft', retrying: 'draft', dead_letter: 'cancelled', cancelled: 'cancelled' };
@@ -18,6 +18,11 @@ export function IntegrationsPanel() {
   const [revealed, setRevealed] = useState(null);
   const [formOpen, setFormOpen] = useState(false);
   const [deliveries, setDeliveries] = useState({ endpointId: null, items: [] });
+  const [apiTokenState, setApiTokenState] = useState(null);
+  const [apiTokenName, setApiTokenName] = useState('');
+  const [apiTokenFormOpen, setApiTokenFormOpen] = useState(false);
+  const [revealedApiToken, setRevealedApiToken] = useState('');
+  const [apiTokenBusy, setApiTokenBusy] = useState(false);
 
   const eventOptions = (reference?.webhookEventTypes ?? []).filter((type) => state?.availableEventTypes.includes(type.value));
 
@@ -29,7 +34,15 @@ export function IntegrationsPanel() {
     }
   }
 
-  useEffect(() => { refresh(); }, []);
+  async function refreshApiTokens() {
+    try {
+      setApiTokenState(await listApiTokens());
+    } catch (requestError) {
+      setError(requestError.message);
+    }
+  }
+
+  useEffect(() => { refresh(); refreshApiTokens(); }, []);
 
   async function loadDeliveries(endpointId) {
     setDeliveries({ endpointId, items: (await listWebhookDeliveries(endpointId)).deliveries });
@@ -72,12 +85,73 @@ export function IntegrationsPanel() {
     }
   }
 
+  async function submitApiToken(event) {
+    event.preventDefault();
+    setApiTokenBusy(true);
+    setError('');
+    setNotice('');
+    try {
+      const result = await createApiToken(apiTokenName);
+      setRevealedApiToken(result.token);
+      setApiTokenName('');
+      setApiTokenFormOpen(false);
+      await refreshApiTokens();
+      setNotice('API token created. Copy it now; it is shown only once.');
+    } catch (requestError) {
+      setError(requestError.message);
+    } finally {
+      setApiTokenBusy(false);
+    }
+  }
+
+  async function copyApiToken() {
+    try {
+      await navigator.clipboard.writeText(revealedApiToken);
+      setNotice('API token copied.');
+    } catch {
+      setError('Copy failed. Select the token and copy it manually.');
+    }
+  }
+
+  async function revokeToken(token) {
+    if (!window.confirm(`Revoke the API token "${token.name}"? Connected clients will stop working immediately.`)) return;
+    setApiTokenBusy(true);
+    setError('');
+    try {
+      await revokeApiToken(token.id);
+      await refreshApiTokens();
+      setNotice('API token revoked.');
+    } catch (requestError) {
+      setError(requestError.message);
+    } finally {
+      setApiTokenBusy(false);
+    }
+  }
+
   const endpoints = state?.endpoints ?? [];
   const limits = state?.limits;
   const atLimit = limits && endpoints.length >= limits.maxEndpoints;
 
   return (
     <section className="surface-section full-section team-panel">
+      <div className="section-heading request-list-heading"><div><p className="eyebrow">READ-ONLY INTEGRATION</p><h2>Public API tokens <span className="heading-count">{apiTokenState?.tokens.filter((token) => !token.revokedAt && new Date(token.expiresAt) > new Date()).length ?? 0}</span></h2></div>
+        <button className="primary-button" disabled={apiTokenBusy || (apiTokenState && apiTokenState.tokens.filter((token) => !token.revokedAt && new Date(token.expiresAt) > new Date()).length >= apiTokenState.maxTokens)} onClick={() => setApiTokenFormOpen((open) => !open)}><Plus size={15} />Create token</button>
+      </div>
+      <p className="privacy-note">Tokens can read this organization’s marketplace requests, offers and awards. They cannot change data or access guest details. Tokens expire after {apiTokenState?.ttlDays ?? 'the configured'} days.</p>
+      {apiTokenFormOpen && <form className="webhook-form api-token-form" onSubmit={submitApiToken}>
+        <label className="field-label">Token name<input className="form-input" value={apiTokenName} onChange={(event) => setApiTokenName(event.target.value)} maxLength="80" required placeholder="Aviat CRM production" /></label>
+        <button className="primary-button" disabled={apiTokenBusy}>{apiTokenBusy ? 'Creating...' : 'Create read-only token'}</button>
+        <button type="button" className="secondary-button" onClick={() => setApiTokenFormOpen(false)}>Cancel</button>
+      </form>}
+      {revealedApiToken && <div className="invite-link-box"><input className="form-input" readOnly value={revealedApiToken} onFocus={(event) => event.target.select()} aria-label="New public API token" /><button type="button" className="secondary-button" onClick={copyApiToken}><Copy size={14} />Copy token</button><button type="button" className="secondary-button" onClick={() => setRevealedApiToken('')}>Done</button><small>Store it in your CRM’s secret manager. It will not be shown again.</small></div>}
+      <div className="api-endpoint-list"><span>GET <code>/v1/public/marketplace/requests</code></span><span>GET <code>/v1/public/marketplace/offers</code></span><span>GET <code>/v1/public/marketplace/awards</code></span></div>
+      {apiTokenState?.tokens.length ? <div className="role-table-wrap"><table className="role-table"><thead><tr><th>NAME</th><th>CREATED</th><th>LAST USED</th><th>EXPIRES</th><th>STATUS</th><th><span className="visually-hidden">Actions</span></th></tr></thead><tbody>
+        {apiTokenState.tokens.map((token) => {
+          const active = !token.revokedAt && new Date(token.expiresAt) > new Date();
+          return <tr key={token.id}><td><strong>{token.name}</strong><small>{token.prefix}…</small></td><td>{formatTime(token.createdAt)}</td><td>{formatTime(token.lastUsedAt)}</td><td>{formatTime(token.expiresAt)}</td><td><span className={`status-pill ${active ? 'open' : 'cancelled'}`}><i />{active ? 'Active' : token.revokedAt ? 'Revoked' : 'Expired'}</span></td><td>{active && <button className="icon-button" aria-label={`Revoke ${token.name}`} disabled={apiTokenBusy} onClick={() => revokeToken(token)}><Trash2 size={15} /></button>}</td></tr>;
+        })}
+      </tbody></table></div> : apiTokenState && <div className="empty-state"><KeyRound size={21} /><strong>No API tokens</strong><span>Create a read-only token for a CRM or reporting client.</span></div>}
+
       <div className="section-heading request-list-heading"><div><p className="eyebrow">INTEGRATIONS</p><h2>Webhooks <span className="heading-count">{endpoints.length}</span></h2></div>
         {state?.signingConfigured && <button className="primary-button" disabled={atLimit} onClick={() => setFormOpen((open) => !open)} title={atLimit ? `At most ${limits.maxEndpoints} endpoints` : undefined}><Plus size={15} />Add endpoint</button>}
       </div>

@@ -3,9 +3,12 @@ import { BadgeCheck, Building2, ExternalLink, Globe2, Hotel, LogOut, Mail, Refre
 import { createDocumentDownloadUrl, decideAgencyVerification, decideSellerVerification, getNotificationOutbox, listPendingAgencyVerifications, listPendingSellerProfiles, logoutAccount, retryNotificationOutbox } from './api.js';
 import { MfaSecurityPanel } from './MfaSecurity.jsx';
 import { AdminModeration } from './AdminModeration.jsx';
+import { AdminDisputes } from './AdminDisputes.jsx';
 import { AdminDestinationLevels, AdminDestinations, AdminFeaturedImport, AdminHotelPropertyQueue, AdminLegalDocuments, AdminOperations, AdminSettings } from './AdminPlatform.jsx';
 import { documentStateClass, formatBytes } from './SellerDocuments.jsx';
 import { labelFor, useReferenceData } from './referenceData.js';
+import { AdminMarketplaceDashboard } from './AdminMarketplaceDashboard.jsx';
+import { AdminAuditLog } from './AdminAuditLog.jsx';
 
 async function openSignedDocument(documentId) {
   // Open the tab synchronously so popup blockers allow it, then point it at the short-lived signed link.
@@ -199,6 +202,8 @@ function AdminWorkspace({ account }) {
       <div className="admin-content">
         <div className="page-heading admin-heading"><div><p className="eyebrow">TRUST AND SAFETY</p><h1>Seller verification</h1><p className="page-subtitle">Review business claims before marketplace access is enabled.</p></div><span className="admin-queue-count"><ShieldCheck size={16} />{sellers.length} pending</span></div>
         {error && <div className="auth-error" role="alert">{error}</div>}
+        <AdminMarketplaceDashboard />
+        <AdminAuditLog />
         <section className="surface-section admin-queue">
           {loading ? <div className="empty-state">Loading verification queue...</div> : sellers.length ? sellers.map((seller) => {
             const Icon = seller.businessType === 'hotelier' ? Hotel : Building2;
@@ -215,6 +220,7 @@ function AdminWorkspace({ account }) {
         </section>
         <p className="admin-policy-note">Approval is audited and enables request matching and offer submission for that seller organization.</p>
         <AgencyVerificationQueue />
+        <AdminDisputes />
         <AdminHotelPropertyQueue />
         <AdminModeration />
         <AdminSettings />

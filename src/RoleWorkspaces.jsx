@@ -127,22 +127,63 @@ export function HotelAvailability({ inventory, loading, onSave }) {
   );
 }
 
-export function RoleProfile({ role, profile, organization, onSave, onDocumentsChanged }) {
+export function RoleProfile({ role, profile, organization, onSave, onSaveSettings, onDocumentsChanged }) {
   const isDmc = role === 'dmc';
   const canManageProfile = useCan('profile.manage');
   const { data: reference } = useReferenceData();
   const [coverage, setCoverage] = useState([]);
   const [saving, setSaving] = useState(false);
+  const [settings, setSettings] = useState({ handledGroupTypes: [], minimumGroupSize: '', budgetMin: '', budgetMax: '', budgetCurrency: '', languages: '', acceptingRequests: true });
+  const [savingSettings, setSavingSettings] = useState(false);
+  const [settingsError, setSettingsError] = useState('');
 
   useEffect(() => {
     setCoverage((profile?.coverage ?? []).map((destination) => ({ destination, mode: destination.mode ?? 'include' })));
   }, [profile]);
+
+  useEffect(() => {
+    if (!reference) return;
+    setSettings({
+      handledGroupTypes: profile?.handledGroupTypes?.length ? profile.handledGroupTypes : isDmc ? reference.groupTypes.map((type) => type.value) : [],
+      minimumGroupSize: profile?.minimumGroupSize == null ? '' : String(profile.minimumGroupSize),
+      budgetMin: profile?.budgetMinMinor == null ? '' : String(fromMinorUnits(profile.budgetMinMinor, profile.budgetCurrency)),
+      budgetMax: profile?.budgetMaxMinor == null ? '' : String(fromMinorUnits(profile.budgetMaxMinor, profile.budgetCurrency)),
+      budgetCurrency: profile?.budgetCurrency ?? reference.defaults.currency,
+      languages: (profile?.languages ?? []).join(', '),
+      acceptingRequests: profile?.acceptingRequests !== false,
+    });
+  }, [profile, reference, isDmc]);
 
   async function submit(event) {
     event.preventDefault();
     setSaving(true);
     await onSave({ coverage: coverage.map((rule) => ({ destination_id: rule.destination.id, mode: rule.mode })) });
     setSaving(false);
+  }
+
+  async function submitSettings(event) {
+    event.preventDefault();
+    setSettingsError('');
+    const form = new FormData(event.currentTarget);
+    const budgetMin = String(form.get('budgetMin') ?? '').trim();
+    const budgetMax = String(form.get('budgetMax') ?? '').trim();
+    if ((budgetMin && !budgetMax) || (!budgetMin && budgetMax)) {
+      setSettingsError('Enter both budget limits or leave the budget blank.');
+      return;
+    }
+    setSavingSettings(true);
+    const languages = String(form.get('languages') ?? '').split(',').map((value) => value.trim()).filter(Boolean);
+    const result = await onSaveSettings({
+      accepting_requests: form.get('accepting_requests') === 'on',
+      handled_group_types: isDmc ? form.getAll('handled_group_types') : [],
+      minimum_group_size: isDmc && form.get('minimumGroupSize') ? Number(form.get('minimumGroupSize')) : null,
+      budget_min_minor: isDmc && budgetMin && budgetMax ? toMinorUnits(budgetMin, form.get('budgetCurrency')) : null,
+      budget_max_minor: isDmc && budgetMin && budgetMax ? toMinorUnits(budgetMax, form.get('budgetCurrency')) : null,
+      budget_currency: isDmc && budgetMin && budgetMax ? form.get('budgetCurrency') : null,
+      languages: isDmc ? languages : [],
+    });
+    setSavingSettings(false);
+    if (!result) setSettingsError('Settings could not be saved.');
   }
 
   return (
@@ -153,6 +194,15 @@ export function RoleProfile({ role, profile, organization, onSave, onDocumentsCh
         <CoverageEditor rules={coverage} onChange={setCoverage} max={reference?.limits?.maxCoverageDestinations ?? 1} />
         <button className="primary-button" type="submit" disabled={saving || !profile || !canManageProfile || !coverage.some((rule) => rule.mode === 'include')} title={canManageProfile ? undefined : 'Only owners and managers can change the company profile.'}>{saving ? 'Saving...' : 'Save coverage'}</button>
       </form> : <HotelPropertiesManager />}
+      <form className="seller-settings-form" onSubmit={submitSettings}>
+        {isDmc && <>
+          <fieldset className="service-picker"><legend>Trip types handled</legend>{reference?.groupTypes.map((type) => <label key={type.value}><input type="checkbox" name="handled_group_types" value={type.value} checked={settings.handledGroupTypes.includes(type.value)} onChange={(event) => setSettings((current) => ({ ...current, handledGroupTypes: event.target.checked ? [...current.handledGroupTypes, type.value] : current.handledGroupTypes.filter((value) => value !== type.value) }))} />{type.label}</label>)}</fieldset>
+          <div className="request-form-grid"><label className="field-label">Minimum group size<input className="form-input" name="minimumGroupSize" type="number" min="1" max="32767" value={settings.minimumGroupSize} onChange={(event) => setSettings((current) => ({ ...current, minimumGroupSize: event.target.value }))} /></label><label className="field-label">Minimum budget<input className="form-input" name="budgetMin" type="number" min="0" step="any" value={settings.budgetMin} onChange={(event) => setSettings((current) => ({ ...current, budgetMin: event.target.value }))} /></label><label className="field-label">Maximum budget<input className="form-input" name="budgetMax" type="number" min="0" step="any" value={settings.budgetMax} onChange={(event) => setSettings((current) => ({ ...current, budgetMax: event.target.value }))} /></label><label className="field-label">Budget currency<select className="form-select" name="budgetCurrency" value={settings.budgetCurrency} onChange={(event) => setSettings((current) => ({ ...current, budgetCurrency: event.target.value }))}>{(reference?.currencies ?? []).map((currency) => <option key={currency} value={currency}>{currency}</option>)}</select></label><label className="field-label">Languages<input className="form-input" name="languages" value={settings.languages} onChange={(event) => setSettings((current) => ({ ...current, languages: event.target.value }))} placeholder="en, hi" /></label></div>
+        </>}
+        <label className="checkbox-field"><input type="checkbox" name="accepting_requests" checked={settings.acceptingRequests} onChange={(event) => setSettings((current) => ({ ...current, acceptingRequests: event.target.checked }))} />Accept new requests</label>
+        {settingsError && <p className="auth-error" role="alert">{settingsError}</p>}
+        <button className="primary-button" type="submit" disabled={savingSettings || !profile || !canManageProfile}>{savingSettings ? 'Saving...' : 'Save request settings'}</button>
+      </form>
       {isDmc && <p className="privacy-note"><BadgeCheck size={15} />Changing your coverage withdraws active offers and requires a new manual verification review.</p>}
       <VerificationDocuments onUploaded={onDocumentsChanged} />
     </section>

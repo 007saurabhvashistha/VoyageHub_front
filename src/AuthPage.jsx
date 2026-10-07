@@ -21,7 +21,7 @@ function AuthPage({ mode }) {
   const [countryError, setCountryError] = useState(false);
   const [countryAttempt, setCountryAttempt] = useState(0);
   const countries = countryData?.countries ?? [];
-  const [selectedRole, setSelectedRole] = useState('agency');
+  const [selectedRole, setSelectedRole] = useState(['agency', 'dmc', 'hotelier'].includes(location.state?.businessType) ? location.state.businessType : 'agency');
   const [coverage, setCoverage] = useState([]);
   const [propertyCity, setPropertyCity] = useState([]);
   const [legalAccepted, setLegalAccepted] = useState(false);
@@ -86,15 +86,16 @@ function AuthPage({ mode }) {
         navigate('/login', { replace: true, state: { notice: 'Account created. Email verification is temporarily disabled; sign in to continue.' } });
         return;
       }
+      const returnTo = typeof location.state?.returnTo === 'string' && location.state.returnTo.startsWith('/accept-invite?token=') ? location.state.returnTo : null;
       if (session.mfaRequired) {
-        navigate('/mfa-challenge', { replace: true });
+        navigate('/mfa-challenge', { replace: true, state: { returnTo } });
         return;
       }
       if (session.mfaSetupRequired) {
         navigate('/mfa-setup', { replace: true });
         return;
       }
-      navigate(session.user.isPlatformAdmin ? '/workspace/admin/verification' : `/workspace/${session.organization.businessType}/overview`, { replace: true });
+      navigate(returnTo ?? (session.user.isPlatformAdmin ? '/workspace/admin/verification' : `/workspace/${session.organization.businessType}/overview`), { replace: true });
     } catch (requestError) {
       setError(requestError.message);
       setErrorCode(requestError.code ?? '');
@@ -140,7 +141,7 @@ function AuthPage({ mode }) {
               {isRegister && <label className="auth-field"><span>Business name</span><span className="auth-input"><Building2 size={16} /><input name="businessName" autoComplete="organization" placeholder="Company or property name" required /></span></label>}
               {isRegister && selectedRole === 'dmc' && <DestinationPicker label="Destination coverage" value={coverage} onChange={setCoverage} multiple max={reference?.limits?.maxCoverageDestinations ?? 1} />}
               {isRegister && selectedRole === 'hotelier' && <DestinationPicker label="Hotel location (you can add more hotels later)" value={propertyCity} onChange={setPropertyCity} kinds={reference?.hotelPropertyDestinationKinds ?? []} placeholder="Search the place or district of your hotel" />}
-              <label className="auth-field"><span>Business email</span><span className="auth-input"><Mail size={16} /><input name="email" type="email" autoComplete="email" placeholder="you@company.com" required /></span></label>
+              <label className="auth-field"><span>Business email</span><span className="auth-input"><Mail size={16} /><input name="email" type="email" autoComplete="email" defaultValue={!isRegister ? location.state?.email : undefined} placeholder="you@company.com" required /></span></label>
               {isRegister && <>
                 <label className="auth-field"><span>Country or region</span><span className="auth-input"><MapPin size={16} /><select name="country" key={countryData?.defaultCountry ?? 'loading'} defaultValue={countryData?.defaultCountry ?? ''} disabled={!countryData} required><option value="" disabled>{countryData ? 'Select country' : countryError ? 'Country list unavailable' : 'Loading countries...'}</option>{countries.map((country) => <option key={country.code} value={country.code}>{country.name}</option>)}</select></span></label>
                 {countryError && <p className="auth-error" role="alert">Country list could not be loaded. <button className="auth-inline-link" type="button" onClick={() => { setCountryError(false); setCountryData(null); setCountryAttempt((attempt) => attempt + 1); }}>Retry</button></p>}

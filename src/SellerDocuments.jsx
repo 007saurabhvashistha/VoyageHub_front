@@ -11,6 +11,7 @@ export function formatBytes(bytes) {
 
 export function documentStateClass(document) {
   if (!document) return 'draft';
+  if (document.expired) return 'cancelled';
   if (document.scanStatus === 'clean' && !document.removedAt) return 'open';
   return document.scanStatus === 'pending' ? 'draft' : 'cancelled';
 }
@@ -20,6 +21,7 @@ export function VerificationDocuments({ onUploaded, submittable = false }) {
   const { data: reference } = useReferenceData();
   const canManage = useCan('profile.manage');
   const [state, setState] = useState(null);
+  const [expiryDates, setExpiryDates] = useState({});
   const [error, setError] = useState('');
   const [uploadingType, setUploadingType] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -27,7 +29,9 @@ export function VerificationDocuments({ onUploaded, submittable = false }) {
 
   async function refresh() {
     try {
-      setState(await getVerificationDocuments());
+      const result = await getVerificationDocuments();
+      setState(result);
+      setExpiryDates((current) => Object.fromEntries(result.requirements.map((item) => [item.type, current[item.type] ?? item.document?.expiresAt ?? ''])));
     } catch (requestError) {
       setError(requestError.message);
     }
@@ -46,7 +50,7 @@ export function VerificationDocuments({ onUploaded, submittable = false }) {
     setUploadingType(type);
     setError('');
     try {
-      const result = await uploadVerificationDocument(type, file);
+      const result = await uploadVerificationDocument(type, file, expiryDates[type] ?? '');
       await refresh();
       onUploaded?.(result);
     } catch (requestError) {
@@ -90,7 +94,8 @@ export function VerificationDocuments({ onUploaded, submittable = false }) {
           return <li key={item.type} className="document-row">
             <div className="document-main">
               <strong>{item.label}{item.required ? '' : ' (optional)'}</strong>
-              {document ? <span>{document.filename} / {formatBytes(document.sizeBytes)} / {new Date(document.uploadedAt).toLocaleDateString()}</span> : <span>Not uploaded</span>}
+              {document ? <span>{document.filename} / {formatBytes(document.sizeBytes)} / {new Date(document.uploadedAt).toLocaleDateString()}{document.expiresAt ? ` / ${document.expired ? 'Expired' : 'Expires'} ${new Date(`${document.expiresAt}T00:00:00`).toLocaleDateString()}` : ''}</span> : <span>Not uploaded</span>}
+              <label className="document-expiry-field">Expiry date (optional)<input type="date" value={expiryDates[item.type] ?? ''} min={new Date().toISOString().slice(0, 10)} disabled={!canManage || !state.storageConfigured || Boolean(uploadingType)} onChange={(event) => setExpiryDates((current) => ({ ...current, [item.type]: event.target.value }))} /></label>
             </div>
             <span className={`status-pill ${documentStateClass(document)}`}><i />{document ? labelFor(reference?.documentScanStatuses, document.scanStatus) : 'Missing'}</span>
             <label className={`secondary-button document-upload ${!canManage || !state.storageConfigured || uploadingType ? 'disabled' : ''}`} title={canManage ? undefined : 'Only owners and managers can upload documents.'}>

@@ -1,8 +1,9 @@
-import { lazy, Suspense, useEffect, useState } from 'react';
+import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import { BrowserRouter, Link, Navigate, Route, Routes, useNavigate, useParams } from 'react-router-dom';
 import {
   ArrowDownUp,
   ArrowUpRight,
+  BarChart3,
   BadgeCheck,
   Bell,
   CalendarDays,
@@ -10,9 +11,11 @@ import {
   ClipboardCheck,
   ChevronDown,
   ChevronRight,
+  Copy,
   Building2,
   Clock3,
   FileText,
+  FileUp,
   Flag,
   Globe2,
   LayoutDashboard,
@@ -24,6 +27,7 @@ import {
   Plus,
   Search,
   ShieldCheck,
+  Star,
   UsersRound,
   UserCog,
   Webhook,
@@ -46,22 +50,29 @@ import { DestinationPicker } from './DestinationPicker.jsx';
 import { AudiencePreview, LeadBadges, StopsEditor, routeText } from './LeadDestinations.jsx';
 import { AlertPreferencesPanel } from './SellerSettings.jsx';
 import { BookingsWorkspace } from './Bookings.jsx';
+import { NotificationSettings } from './NotificationSettings.jsx';
 import { IntegrationsPanel } from './Integrations.jsx';
+import { ReportsWorkspace } from './Reports.jsx';
+import { SessionManagementPanel } from './Sessions.jsx';
 import { VerificationDocuments } from './SellerDocuments.jsx';
 import {
   acceptOfferNegotiation,
   awardMarketplaceOffer,
+  cancelMarketplaceRequest,
   changeRequestTrip,
   createMarketplaceRequest,
   createOfferNegotiation,
   declineOfferNegotiation,
+  extendMarketplaceRequestDeadline,
   getCurrentSession,
   getRequestMessages,
+  listOrganizations,
   listHotelInventory,
   getSellerProfile,
   listMarketplaceOffers,
   listMarketplaceRequests,
   listMarketplaceSuppliers,
+  listPreferredSuppliers,
   listNotifications,
   listRequestOffers,
   markAllNotificationsRead,
@@ -73,7 +84,11 @@ import {
   reviseMarketplaceOffer,
   submitDmcOffer,
   submitHotelOffer,
+  setPreferredSupplier,
+  switchOrganization,
+  searchDestinations,
   updateSellerProfile,
+  updateSellerSettings,
   saveHotelInventory,
   sendRequestMessage,
   sendMessageAttachment,
@@ -163,6 +178,47 @@ const workspaceDetails = {
   hotelier: { roleLabel: 'Hotelier', title: 'Property manager', action: 'Availability' },
 };
 
+function OrganizationSwitcher({ account }) {
+  const [organizations, setOrganizations] = useState([account.organization]);
+  const [switching, setSwitching] = useState(false);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    let active = true;
+    listOrganizations()
+      .then((result) => active && setOrganizations(result.organizations))
+      .catch((requestError) => active && setError(requestError.message));
+    return () => { active = false; };
+  }, [account.organization.id]);
+
+  async function changeOrganization(event) {
+    const organizationId = event.target.value;
+    if (!organizationId || organizationId === account.organization.id) return;
+    setSwitching(true);
+    setError('');
+    try {
+      const result = await switchOrganization(organizationId);
+      window.location.assign(`/workspace/${result.organization.businessType}/overview`);
+    } catch (requestError) {
+      setError(requestError.message);
+      setSwitching(false);
+    }
+  }
+
+  return <>
+    <div className="workspace-switcher">
+      <span className="workspace-avatar">{account.organization.name[0]?.toUpperCase()}</span>
+      <span className="workspace-copy"><strong>{account.organization.name}</strong><small>{workspaceDetails[account.organization.businessType]?.roleLabel}</small></span>
+      <ChevronDown size={15} />
+      {organizations.length > 1 && <select className="workspace-switcher-select" aria-label="Switch organization" value={account.organization.id} disabled={switching} onChange={changeOrganization}>
+        <option value={account.organization.id}>{account.organization.name} / current</option>
+        {organizations.filter((organization) => organization.id !== account.organization.id).map((organization) => <option key={organization.id} value={organization.id}>{organization.name} / {workspaceDetails[organization.businessType]?.roleLabel}</option>)}
+      </select>}
+    </div>
+    {error && <p className="workspace-switcher-error" role="alert">{error}</p>}
+  </>;
+}
+
 function Workspace({ role, account }) {
   const navigate = useNavigate();
   const details = {
@@ -177,33 +233,39 @@ function Workspace({ role, account }) {
       { label: 'Requests', icon: FileText },
       { label: 'Offers', icon: MessageSquareText },
       { label: 'Bookings', icon: ClipboardCheck },
+      { label: 'Reports', icon: BarChart3 },
       { label: 'Suppliers', icon: UsersRound },
       { label: 'Verification', icon: BadgeCheck },
       { label: 'Team', icon: UserCog },
       { label: 'Integrations', icon: Webhook, capability: 'integration.manage' },
       { label: 'Security', icon: ShieldCheck },
+      { label: 'Notifications', icon: Bell },
     ],
     dmc: [
       { label: 'Overview', icon: LayoutDashboard },
       { label: 'Matching requests', icon: FileText },
       { label: 'My offers', icon: MessageSquareText },
       { label: 'Bookings', icon: ClipboardCheck },
+      { label: 'Performance', icon: BarChart3 },
       { label: 'Company profile', icon: Building2 },
       { label: 'Lead alerts', icon: Bell },
       { label: 'Team', icon: UserCog },
       { label: 'Integrations', icon: Webhook, capability: 'integration.manage' },
       { label: 'Security', icon: ShieldCheck },
+      { label: 'Notifications', icon: Bell },
     ],
     hotelier: [
       { label: 'Overview', icon: LayoutDashboard },
       { label: 'Booking requests', icon: FileText },
       { label: 'Bookings', icon: ClipboardCheck },
+      { label: 'Performance', icon: BarChart3 },
       { label: 'Properties', icon: Hotel },
       { label: 'Lead alerts', icon: Bell },
       { label: 'Availability', icon: CalendarDays },
       { label: 'Team', icon: UserCog },
       { label: 'Integrations', icon: Webhook, capability: 'integration.manage' },
       { label: 'Security', icon: ShieldCheck },
+      { label: 'Notifications', icon: Bell },
     ],
   };
   const navigation = workspaceNavigation[role].filter((item) => !item.capability || account.capabilities?.includes(item.capability));
@@ -226,6 +288,7 @@ function Workspace({ role, account }) {
   const [responseTarget, setResponseTarget] = useState(null);
   const [comparison, setComparison] = useState(null);
   const [tripChangeTarget, setTripChangeTarget] = useState(null);
+  const [deadlineTarget, setDeadlineTarget] = useState(null);
   const [messageThread, setMessageThread] = useState(null);
   const [reportTarget, setReportTarget] = useState(null);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
@@ -338,6 +401,18 @@ function Workspace({ role, account }) {
     }
   }
 
+  async function cloneRequest(source) {
+    try {
+      const result = await repostRequest(source.id);
+      setDraftToPublish(result.request);
+      setCreateOpen(true);
+      await syncMarketplace();
+      setToast(`Draft copied from ${source.requestCode}. Review it before publishing.`);
+    } catch (error) {
+      setMarketplaceError(error.message);
+    }
+  }
+
   async function publishDraft() {
     if (!draftToPublish) return;
     try {
@@ -402,6 +477,31 @@ function Workspace({ role, account }) {
       return null;
     } catch (error) {
       return error.message;
+    }
+  }
+
+  async function saveDeadlineExtension(change) {
+    if (!deadlineTarget) return 'Request not found.';
+    try {
+      await extendMarketplaceRequestDeadline(deadlineTarget.id, change);
+      setDeadlineTarget(null);
+      await syncMarketplace();
+      setToast('Response deadline extended. Matched sellers were notified.');
+      return null;
+    } catch (error) {
+      return error.message;
+    }
+  }
+
+  async function cancelRequest(request) {
+    if (!window.confirm(`Cancel ${request.requestCode}? Sellers will be notified and active offers withdrawn.`)) return;
+    try {
+      await cancelMarketplaceRequest(request.id);
+      if (comparison?.request.id === request.id) setComparison(null);
+      await syncMarketplace();
+      setToast(`${request.requestCode} cancelled.`);
+    } catch (error) {
+      setMarketplaceError(error.message);
     }
   }
 
@@ -475,6 +575,18 @@ function Workspace({ role, account }) {
     }
   }
 
+  async function saveSellerSettings(settings) {
+    try {
+      const result = await updateSellerSettings(settings);
+      await syncMarketplace();
+      setToast(result.acceptingRequests ? 'Matching preferences saved. Your organization can receive new requests.' : 'Matching preferences saved. New requests are paused.');
+      return true;
+    } catch (error) {
+      setMarketplaceError(error.message);
+      return false;
+    }
+  }
+
   async function openComparison(request) {
     if (!request) {
       setToast('No agency request is attached to this offer.');
@@ -502,11 +614,7 @@ function Workspace({ role, account }) {
           <span className="brand-copy"><strong>LEAD EXCHANGE</strong><small>by VoyageHub</small></span>
         </a>
 
-        <div className="workspace-switcher">
-          <span className="workspace-avatar">{details.initials[0]}</span>
-          <span className="workspace-copy"><strong>{details.organization}</strong><small>{details.roleLabel}</small></span>
-          <ChevronDown size={15} />
-        </div>
+        <OrganizationSwitcher account={account} />
 
         <p className="nav-caption">WORKSPACE</p>
         <nav className="primary-nav">
@@ -562,24 +670,32 @@ function Workspace({ role, account }) {
               statusFilter={statusFilter}
               setStatusFilter={setStatusFilter}
               onCreate={() => setCreateOpen(true)}
+              onCloneRequest={canWriteRequests ? cloneRequest : null}
+              onExtendDeadline={canWriteRequests ? setDeadlineTarget : null}
+              onCancelRequest={canWriteRequests ? cancelRequest : null}
               onOpenRequest={openComparison}
             />
           )}
           {role === 'agency' && activePage === 'Offers' && <OfferWorkspace offers={offers} onCompare={(offer) => openComparison(requests.find((item) => item.id === offer.requestId))} />}
+          {role === 'agency' && activePage === 'Reports' && <ReportsWorkspace role={role} />}
           {role === 'agency' && activePage === 'Suppliers' && <SupplierWorkspace />}
           {role === 'agency' && activePage === 'Verification' && <section className="surface-section full-section"><div className="section-heading request-list-heading"><div><p className="eyebrow">AGENCY VERIFICATION</p><h2>{details.organization}</h2></div></div><p className="modal-copy">Verified agencies show a badge on every request, so sellers know the buyer is a real business.</p><VerificationDocuments submittable /></section>}
           {activePage === 'Security' && <MfaSecurityPanel account={account} />}
+          {activePage === 'Security' && <SessionManagementPanel />}
           {activePage === 'Security' && <AccountPanel account={account} onDeleted={(result) => navigate('/login', { replace: true, state: { notice: `Account deletion scheduled for ${new Date(result.scheduledFor).toLocaleDateString()}. Sign in before then to cancel.` } })} />}
           {activePage === 'Team' && <TeamPanel account={account} />}
           {activePage === 'Integrations' && <IntegrationsPanel />}
           {activePage === 'Bookings' && <BookingsWorkspace />}
+          {activePage === 'Notifications' && <NotificationSettings />}
           {role === 'dmc' && activePage === 'Overview' && <DmcOverview requests={requests} offers={offers} sellerProfile={sellerProfile} loading={dataLoading} onOpenRequests={() => setActivePage('Matching requests')} onOpenOffers={() => setActivePage('My offers')} onRespond={setResponseTarget} />}
           {role === 'dmc' && activePage === 'Matching requests' && <DmcRequestWorkspace requests={requests} sellerProfile={sellerProfile} loading={dataLoading} onRespond={setResponseTarget} onReconfirm={reconfirmOffer} onAnswerNegotiation={answerNegotiation} onRevise={(request) => setResponseTarget({ ...request, reviseOfferId: request.myOfferId })} onReport={(request) => setReportTarget({ type: 'request', id: request.id, label: `request ${request.requestCode}` })} onMessage={(request) => setMessageThread({ requestId: request.id, requestCode: request.requestCode, peerName: request.agencyName })} />}
           {role === 'dmc' && activePage === 'My offers' && <DmcOffers offers={offers} loading={dataLoading} />}
-          {role === 'dmc' && activePage === 'Company profile' && <RoleProfile role="dmc" profile={sellerProfile} organization={details.organization} onSave={saveSellerProfile} onDocumentsChanged={syncMarketplace} />}
+          {role === 'dmc' && activePage === 'Performance' && <ReportsWorkspace role={role} />}
+          {role === 'dmc' && activePage === 'Company profile' && <RoleProfile role="dmc" profile={sellerProfile} organization={details.organization} onSave={saveSellerProfile} onSaveSettings={saveSellerSettings} onDocumentsChanged={syncMarketplace} />}
           {role === 'hotelier' && activePage === 'Overview' && <HotelOverview requests={requests} offers={offers} sellerProfile={sellerProfile} loading={dataLoading} onOpenRequests={() => setActivePage('Booking requests')} onOpenAvailability={() => setActivePage('Availability')} onRespond={setResponseTarget} />}
           {role === 'hotelier' && activePage === 'Booking requests' && <HotelRequestWorkspace requests={requests} sellerProfile={sellerProfile} loading={dataLoading} onRespond={setResponseTarget} onReconfirm={reconfirmOffer} onAnswerNegotiation={answerNegotiation} onRevise={(request) => setResponseTarget({ ...request, reviseOfferId: request.myOfferId })} onReport={(request) => setReportTarget({ type: 'request', id: request.id, label: `request ${request.requestCode}` })} onMessage={(request) => setMessageThread({ requestId: request.id, requestCode: request.requestCode, peerName: request.agencyName })} />}
-          {role === 'hotelier' && activePage === 'Properties' && <RoleProfile role="hotelier" profile={sellerProfile} organization={details.organization} onSave={saveSellerProfile} onDocumentsChanged={syncMarketplace} />}
+          {role === 'hotelier' && activePage === 'Properties' && <RoleProfile role="hotelier" profile={sellerProfile} organization={details.organization} onSave={saveSellerProfile} onSaveSettings={saveSellerSettings} onDocumentsChanged={syncMarketplace} />}
+          {role === 'hotelier' && activePage === 'Performance' && <ReportsWorkspace role={role} />}
           {role !== 'agency' && activePage === 'Lead alerts' && <AlertPreferencesPanel role={role} />}
           {role === 'hotelier' && activePage === 'Availability' && <HotelAvailability inventory={inventory} loading={dataLoading} onSave={saveInventory} />}
 
@@ -620,6 +736,7 @@ function Workspace({ role, account }) {
         }
       }} onClose={() => setComparison(null)} />}
       {tripChangeTarget && <TripChangeModal request={tripChangeTarget} onClose={() => setTripChangeTarget(null)} onSave={saveTripChange} />}
+      {deadlineTarget && <DeadlineExtensionModal request={deadlineTarget} onClose={() => setDeadlineTarget(null)} onSave={saveDeadlineExtension} />}
       {messageThread && <MessageThreadModal {...messageThread} onReport={(message) => setReportTarget({ type: 'message', id: message.id, label: `message from ${message.senderName}` })} onClose={() => setMessageThread(null)} />}
       {reportTarget && <ReportDialog target={reportTarget} onClose={() => setReportTarget(null)} onReported={() => setToast('Report sent to platform operations.')} />}
       {notificationsOpen && <NotificationPopover notifications={notifications} unreadCount={unreadCount} loading={notificationsLoading} onClose={() => setNotificationsOpen(false)} onRead={readNotification} onReadAll={readAllNotifications} />}
@@ -638,6 +755,7 @@ function overviewSubtitle(role) {
 
 function SupplierInvitePicker({ selected, onChange, maxInvited }) {
   const [search, setSearch] = useState('');
+  const [favoritesOnly, setFavoritesOnly] = useState(false);
   const [results, setResults] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -646,13 +764,13 @@ function SupplierInvitePicker({ selected, onChange, maxInvited }) {
     let active = true;
     setLoading(true);
     const timeout = window.setTimeout(() => {
-      listMarketplaceSuppliers({ search: search.trim(), limit: 10 })
+      listMarketplaceSuppliers({ search: search.trim(), limit: 10, favoritesOnly })
         .then((result) => { if (active) { setResults(result.suppliers); setError(''); } })
         .catch((requestError) => active && setError(requestError.message))
         .finally(() => active && setLoading(false));
     }, 250);
     return () => { active = false; window.clearTimeout(timeout); };
-  }, [search]);
+  }, [search, favoritesOnly]);
 
   const selectedIds = new Set(selected.map((supplier) => supplier.organizationId));
   function toggle(supplier) {
@@ -665,12 +783,13 @@ function SupplierInvitePicker({ selected, onChange, maxInvited }) {
       <legend>Invite verified suppliers ({selected.length}/{maxInvited})</legend>
       {selected.length > 0 && <div className="invite-chips">{selected.map((supplier) => <button type="button" key={supplier.organizationId} className="invite-chip" onClick={() => toggle(supplier)} aria-label={`Remove ${supplier.name}`}>{supplier.name}<X size={12} /></button>)}</div>}
       <label className="search-field"><Search size={16} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search company or destination" aria-label="Search suppliers to invite" /></label>
+      <label className="preferred-filter"><input type="checkbox" checked={favoritesOnly} onChange={(event) => setFavoritesOnly(event.target.checked)} />Preferred suppliers only</label>
       {error && <p className="auth-error" role="alert">{error}</p>}
       <div className="invite-results">
         {loading ? <small className="table-secondary">Searching verified suppliers...</small> : results.length ? results.map((supplier) => (
           <label key={supplier.organizationId} className="invite-result">
             <input type="checkbox" checked={selectedIds.has(supplier.organizationId)} disabled={!selectedIds.has(supplier.organizationId) && selected.length >= maxInvited} onChange={() => toggle(supplier)} />
-            <span><strong>{supplier.name}</strong><small>{supplier.type === 'hotelier' ? `Hotel / ${supplier.propertyCity ?? supplier.countryCode}` : `DMC / ${supplier.coverageDestinations.join(', ')}`}</small></span>
+            <span><strong>{supplier.name}{supplier.isFavorite && <em className="preferred-label">Preferred</em>}</strong><small>{supplier.type === 'hotelier' ? `Hotel / ${supplier.propertyCity ?? supplier.countryCode}` : `DMC / ${supplier.coverageDestinations.join(', ')}`}</small></span>
           </label>
         )) : <small className="table-secondary">No verified suppliers match this search.</small>}
       </div>
@@ -689,12 +808,99 @@ function CreateRequestModal({ draft, onClose, onCreate, onPublish }) {
   const [requirementType, setRequirementType] = useState('');
   const [stops, setStops] = useState([]);
   const [hotelCategory, setHotelCategory] = useState('');
+  const [importedValues, setImportedValues] = useState(null);
+  const requestFormRef = useRef(null);
+  const [, setPreviewRevision] = useState(0);
   const isHotelOnly = reference?.requirementTypes.find((type) => type.value === requirementType)?.audience === 'hotelier';
   const allowedServices = (reference?.services ?? []).filter((service) => service.allowedFor.includes(requirementType));
   const chosenDestinationIds = isHotelOnly ? destination.map((item) => item.id) : stops.map((stop) => stop.destination.id);
   const now = new Date();
   const deadlineLimits = reference?.limits.requestDeadline;
   const deadlineInputFormat = "yyyy-MM-dd'T'HH:mm";
+  const previewForm = requestFormRef.current ? new FormData(requestFormRef.current) : null;
+  const previewBudgetMin = previewForm?.get('budgetMin');
+  const previewBudgetMax = previewForm?.get('budgetMax');
+  let previewBudgetMinMinor = null;
+  let previewBudgetMaxMinor = null;
+  if (previewBudgetMin && previewBudgetMax) {
+    try {
+      previewBudgetMinMinor = toMinorUnits(previewBudgetMin, previewForm.get('budgetCurrency'));
+      previewBudgetMaxMinor = toMinorUnits(previewBudgetMax, previewForm.get('budgetCurrency'));
+    } catch {
+      previewBudgetMinMinor = null;
+      previewBudgetMaxMinor = null;
+    }
+  }
+  const audienceFacts = {
+    group_type: previewForm?.get('groupType') || importedValues?.group_type || importedValues?.groupType || reference?.groupTypes[0]?.value,
+    adults: Number(previewForm?.get('adults') ?? importedValues?.adults ?? 2),
+    children: Number(previewForm?.get('children') ?? importedValues?.children ?? 0),
+    infants: Number(previewForm?.get('infants') ?? importedValues?.infants ?? 0),
+    budget_min_minor: previewBudgetMinMinor,
+    budget_max_minor: previewBudgetMaxMinor,
+    budget_currency: previewBudgetMinMinor == null ? null : previewForm.get('budgetCurrency'),
+    travel_start_date: previewForm?.get('travelStartDate') || null,
+    travel_end_date: previewForm?.get('travelEndDate') || null,
+    room_count: previewForm?.get('roomCount') ? Number(previewForm.get('roomCount')) : null,
+  };
+
+  useEffect(() => {
+    if (importedValues) setPreviewRevision((revision) => revision + 1);
+  }, [importedValues?.importKey]);
+
+  async function importCrmRequest(event) {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+    setFormError('');
+    try {
+      const parsed = JSON.parse(await file.text());
+      const source = parsed?.request ?? parsed;
+      if (!source || typeof source !== 'object' || Array.isArray(source)) throw new Error('The CRM export must contain a request object.');
+      const nextRequirement = source.requirement_type ?? source.requirementType;
+      if (!reference.requirementTypes.some((item) => item.value === nextRequirement)) throw new Error('Choose a supported request type in the CRM export.');
+      const rawDestinations = source.destinations ?? (source.destination ? [source.destination] : []);
+      if (!Array.isArray(rawDestinations) || rawDestinations.length === 0) throw new Error('The CRM export must include at least one destination.');
+      const requirement = reference.requirementTypes.find((item) => item.value === nextRequirement);
+      const isHotelRequest = requirement.audience === 'hotelier';
+      const kinds = isHotelRequest
+        ? reference.limits.hotelLeadAllowedDestinationKinds ?? [] : [];
+      const resolved = await Promise.all(rawDestinations.map(async (item) => {
+        const name = typeof item === 'string' ? item : item?.name ?? item?.destination;
+        if (typeof name !== 'string' || !name.trim()) throw new Error('Every CRM destination needs a name.');
+        const result = await searchDestinations(name.trim(), { kinds });
+        const destinationMatch = result.destinations.find((candidate) => candidate.name.toLocaleLowerCase() === name.trim().toLocaleLowerCase());
+        if (!destinationMatch) throw new Error(`Match "${name}" to a destination in the master list before importing.`);
+        return { destination: destinationMatch, nights: typeof item === 'object' ? item.nights ?? null : null };
+      }));
+      const importedServices = Array.isArray(source.services) ? source.services : typeof source.services === 'string' ? [source.services] : [];
+      const allowedServiceValues = new Set(reference.services.filter((item) => item.allowedFor.includes(nextRequirement)).map((item) => item.value));
+      if (importedServices.some((service) => !allowedServiceValues.has(service))) throw new Error('The CRM export includes a service that is not valid for this request type.');
+      const groupType = source.group_type ?? source.groupType;
+      if (!reference.groupTypes.some((item) => item.value === groupType)) throw new Error('The CRM export must include a supported group type.');
+      const nextDateMode = source.travel_month || source.travelMonth ? 'month' : 'exact';
+      const nextNights = source.nights ?? (source.travel_start_date && source.travel_end_date ? differenceInCalendarDays(parseISO(source.travel_end_date), parseISO(source.travel_start_date)) : null);
+      if (!Number.isInteger(Number(nextNights)) || Number(nextNights) < 1) throw new Error('The CRM export must include travel dates or a travel month and nights.');
+      if (requirement.maxDestinations != null && resolved.length > requirement.maxDestinations) throw new Error(`${requirement.label} can include at most ${requirement.maxDestinations} destination(s).`);
+
+      setRequirementType(nextRequirement);
+      setDateMode(nextDateMode);
+      setHotelCategory(source.hotel_category == null ? '' : String(source.hotel_category));
+      setImportedValues({ ...source, group_type: groupType, services: importedServices, nights: Number(nextNights), importKey: Date.now() });
+      if (isHotelRequest) {
+        setDestination(resolved.map((item) => item.destination));
+        setStops([]);
+      } else {
+        setStops(resolved.map((item) => ({ destination: item.destination, nights: item.nights == null ? '' : String(item.nights) })));
+        setDestination([]);
+      }
+      setVisibility('open');
+      setInvitedSuppliers([]);
+      setFormError('CRM request imported. Review all details before saving.');
+    } catch (error) {
+      setFormError(error instanceof SyntaxError ? 'Choose a valid CRM JSON export.' : error.message);
+    }
+  }
 
   async function submitDraft(event) {
     event.preventDefault();
@@ -725,6 +931,13 @@ function CreateRequestModal({ draft, onClose, onCreate, onPublish }) {
     const budgetMin = form.get('budgetMin');
     const budgetMax = form.get('budgetMax');
     const budgetCurrency = form.get('budgetCurrency');
+    const childrenCount = Number(form.get('children') ?? 0);
+    const childAges = String(form.get('childAges') ?? '').split(/[\s,;]+/).filter(Boolean).map(Number);
+    const childRange = reference.travellerTypes.find((traveller) => traveller.value === 'child');
+    if (childrenCount > 0 && (childAges.length !== childrenCount || childAges.some((age) => !Number.isInteger(age) || age < childRange.minAge || age > childRange.maxAge))) {
+      setFormError(`Enter one age between ${childRange.minAge} and ${childRange.maxAge} for each child.`);
+      return;
+    }
     if ((budgetMin && !budgetMax) || (!budgetMin && budgetMax)) {
       setFormError('Enter both budget limits or leave the budget blank.');
       return;
@@ -742,6 +955,8 @@ function CreateRequestModal({ draft, onClose, onCreate, onPublish }) {
       adults: Number(form.get('adults')),
       children: Number(form.get('children')),
       infants: Number(form.get('infants')),
+      child_ages: childAges,
+      special_requests: String(form.get('specialRequests') ?? '').trim() || null,
       group_type: form.get('groupType'),
       hotel_category: hotelCategory ? Number(hotelCategory) : null,
       room_count: form.get('roomCount') ? Number(form.get('roomCount')) : null,
@@ -770,11 +985,13 @@ function CreateRequestModal({ draft, onClose, onCreate, onPublish }) {
         {draft ? (
           <>
             <p className="modal-copy">This allowlisted snapshot is what matched sellers will receive. No traveler names, contacts, or internal notes are included.</p>
-            <dl className="request-preview-list"><div><dt>Lead type</dt><dd>{labelFor(reference?.requirementTypes, draft.requirementType)}</dd></div><div><dt>Destination</dt><dd>{draft.destinations?.length ? routeText(draft.destinations) : draft.destination}, {draft.destinationCountry}</dd></div><div><dt>Travel</dt><dd>{draft.dates} / {draft.nights} nights</dd></div><div><dt>Travelers</dt><dd>{draft.travelers}</dd></div><div><dt>Services</dt><dd>{draft.services.map((service) => labelFor(reference?.services, service)).join(', ')}</dd></div><div><dt>Response deadline</dt><dd>{new Date(draft.responseDeadline).toLocaleString()}</dd></div><div><dt>Visibility</dt><dd>{labelFor(reference?.requestVisibilities, draft.visibility)}</dd></div>{draft.invitedSellers?.length > 0 && <div><dt>Invited suppliers</dt><dd>{draft.invitedSellers.map((seller) => seller.name).join(', ')}</dd></div>}</dl>
+            <dl className="request-preview-list"><div><dt>Lead type</dt><dd>{labelFor(reference?.requirementTypes, draft.requirementType)}</dd></div><div><dt>Destination</dt><dd>{draft.destinations?.length ? routeText(draft.destinations) : draft.destination}, {draft.destinationCountry}</dd></div><div><dt>Travel</dt><dd>{draft.dates} / {draft.nights} nights</dd></div><div><dt>Travelers</dt><dd>{draft.travelers}</dd></div>{draft.childAges?.length > 0 && <div><dt>Child ages</dt><dd>{draft.childAges.join(', ')}</dd></div>}{draft.specialRequests && <div><dt>Special requests</dt><dd>{draft.specialRequests}</dd></div>}<div><dt>Services</dt><dd>{draft.services.map((service) => labelFor(reference?.services, service)).join(', ')}</dd></div><div><dt>Response deadline</dt><dd>{new Date(draft.responseDeadline).toLocaleString()}</dd></div><div><dt>Visibility</dt><dd>{labelFor(reference?.requestVisibilities, draft.visibility)}</dd></div>{draft.invitedSellers?.length > 0 && <div><dt>Invited suppliers</dt><dd>{draft.invitedSellers.map((seller) => seller.name).join(', ')}</dd></div>}</dl>
             <div className="modal-actions"><button type="button" className="secondary-button" onClick={onClose}>Keep draft</button><button type="button" className="primary-button" onClick={onPublish}>Publish request</button></div>
           </>
         ) : !reference ? <div className="empty-state">{referenceError || 'Loading request options...'}</div> : (
-          <form className="request-form" onSubmit={submitDraft}>
+          <>
+          <label className="secondary-button document-upload"><FileUp size={15} />Import CRM JSON<input type="file" className="visually-hidden" accept="application/json,.json" onChange={importCrmRequest} /></label>
+          <form ref={requestFormRef} key={importedValues?.importKey ?? 'blank-request'} className="request-form" onChange={() => setPreviewRevision((revision) => revision + 1)} onSubmit={submitDraft}>
             <fieldset className="requirement-picker"><legend>What do you need?</legend>
               {reference.requirementTypes.map((type) => (
                 <label key={type.value} className={`requirement-option ${requirementType === type.value ? 'selected' : ''}`}>
@@ -787,17 +1004,20 @@ function CreateRequestModal({ draft, onClose, onCreate, onPublish }) {
             {requirementType && (isHotelOnly
               ? <DestinationPicker label="Destination" value={destination} onChange={setDestination} kinds={reference.limits.hotelLeadAllowedDestinationKinds ?? []} placeholder="Search a state, district or place" />
               : <StopsEditor stops={stops} onChange={setStops} max={reference.limits.maxRequestDestinations ?? 1} />)}
-            <AudiencePreview requirementType={requirementType} destinationIds={chosenDestinationIds} hotelCategory={hotelCategory} />
-            <div className="request-form-grid"><label className="field-label">Date mode<select className="form-select" value={dateMode} onChange={(event) => setDateMode(event.target.value)}><option value="exact">Exact dates</option><option value="month">Month and nights</option></select></label>{dateMode === 'exact' ? <><label className="field-label">Arrival<input className="form-input" name="travelStartDate" type="date" min={format(now, 'yyyy-MM-dd')} required /></label><label className="field-label">Departure<input className="form-input" name="travelEndDate" type="date" min={format(now, 'yyyy-MM-dd')} required /></label></> : <><label className="field-label">Travel month<input className="form-input" name="travelMonth" type="month" min={format(now, 'yyyy-MM')} required /></label><label className="field-label">Nights<input className="form-input" name="nights" type="number" min="1" max="90" required /></label></>}
-              <label className="field-label">Adults<input className="form-input" name="adults" type="number" min="1" max="100" defaultValue="2" required /></label><label className="field-label">Children<input className="form-input" name="children" type="number" min="0" max="80" defaultValue="0" /></label><label className="field-label">Infants<input className="form-input" name="infants" type="number" min="0" max="40" defaultValue="0" /></label><label className="field-label">Group type<select className="form-select" name="groupType">{reference.groupTypes.map((type) => <option key={type.value} value={type.value}>{type.label}</option>)}</select></label><label className="field-label">Hotel category<select className="form-select" name="hotelCategory" value={hotelCategory} onChange={(event) => setHotelCategory(event.target.value)}><option value="">Any</option>{reference.hotelCategories.map((category) => <option key={category.value} value={category.value}>{category.label}</option>)}</select></label><label className="field-label">Rooms<input className="form-input" name="roomCount" type="number" min="1" max="50" defaultValue="1" /></label><label className="field-label">Meal plan<select className="form-select" name="mealPlan"><option value="">Any</option>{reference.mealPlans.map((plan) => <option key={plan.value} value={plan.value}>{plan.label}</option>)}</select></label></div>
-            {requirementType && <fieldset className="service-picker"><legend>Services requested</legend>{allowedServices.map((service) => <label key={service.value}><input type="checkbox" name="services" value={service.value} {...(isHotelOnly ? { checked: true, disabled: true, readOnly: true } : {})} />{service.label}</label>)}</fieldset>}
-            <p className="field-label budget-title">Optional budget range</p><div className="request-form-grid budget-grid"><select className="form-select" name="budgetCurrency" aria-label="Budget currency" defaultValue={reference.defaults.currency}>{reference.currencies.map((code) => <option key={code} value={code}>{code}</option>)}</select><input className="form-input" name="budgetMin" type="number" min="0" step="any" placeholder="Minimum" /><input className="form-input" name="budgetMax" type="number" min="0" step="any" placeholder="Maximum" /></div>
+            <AudiencePreview requirementType={requirementType} destinationIds={chosenDestinationIds} hotelCategory={hotelCategory} facts={audienceFacts} />
+            <div className="request-form-grid"><label className="field-label">Date mode<select className="form-select" value={dateMode} onChange={(event) => setDateMode(event.target.value)}><option value="exact">Exact dates</option><option value="month">Month and nights</option></select></label>{dateMode === 'exact' ? <><label className="field-label">Arrival<input className="form-input" name="travelStartDate" type="date" min={format(now, 'yyyy-MM-dd')} defaultValue={importedValues?.travel_start_date ?? importedValues?.travelStartDate ?? ''} required /></label><label className="field-label">Departure<input className="form-input" name="travelEndDate" type="date" min={format(now, 'yyyy-MM-dd')} defaultValue={importedValues?.travel_end_date ?? importedValues?.travelEndDate ?? ''} required /></label></> : <><label className="field-label">Travel month<input className="form-input" name="travelMonth" type="month" min={format(now, 'yyyy-MM')} defaultValue={importedValues?.travel_month ?? importedValues?.travelMonth ?? ''} required /></label><label className="field-label">Nights<input className="form-input" name="nights" type="number" min="1" max="90" defaultValue={importedValues?.nights ?? ''} required /></label></>}
+              <label className="field-label">Adults<input className="form-input" name="adults" type="number" min="1" max="100" defaultValue={importedValues?.adults ?? 2} required /></label><label className="field-label">Children<input className="form-input" name="children" type="number" min="0" max="80" defaultValue={importedValues?.children ?? 0} /></label><label className="field-label">Infants<input className="form-input" name="infants" type="number" min="0" max="40" defaultValue={importedValues?.infants ?? 0} /></label><label className="field-label">Group type<select className="form-select" name="groupType" defaultValue={importedValues?.group_type ?? importedValues?.groupType ?? reference.groupTypes[0]?.value}>{reference.groupTypes.map((type) => <option key={type.value} value={type.value}>{type.label}</option>)}</select></label><label className="field-label">Hotel category<select className="form-select" name="hotelCategory" value={hotelCategory} onChange={(event) => setHotelCategory(event.target.value)}><option value="">Any</option>{reference.hotelCategories.map((category) => <option key={category.value} value={category.value}>{category.label}</option>)}</select></label><label className="field-label">Rooms<input className="form-input" name="roomCount" type="number" min="1" max="50" defaultValue={importedValues?.room_count ?? importedValues?.roomCount ?? 1} /></label><label className="field-label">Meal plan<select className="form-select" name="mealPlan" defaultValue={importedValues?.meal_plan ?? importedValues?.mealPlan ?? ''}><option value="">Any</option>{reference.mealPlans.map((plan) => <option key={plan.value} value={plan.value}>{plan.label}</option>)}</select></label></div>
+            <div className="request-form-grid"><label className="field-label">Child ages<input className="form-input" name="childAges" inputMode="numeric" defaultValue={Array.isArray(importedValues?.child_ages) ? importedValues.child_ages.join(', ') : importedValues?.childAges ?? ''} placeholder="Comma-separated" /></label></div>
+            <label className="field-label">Special requests<textarea className="form-input" name="specialRequests" maxLength="2000" defaultValue={importedValues?.special_requests ?? importedValues?.specialRequests ?? ''} /></label>
+            {requirementType && <fieldset className="service-picker"><legend>Services requested</legend>{allowedServices.map((service) => <label key={service.value}><input type="checkbox" name="services" value={service.value} defaultChecked={isHotelOnly || importedValues?.services?.includes(service.value)} {...(isHotelOnly ? { checked: true, disabled: true, readOnly: true } : {})} />{service.label}</label>)}</fieldset>}
+            <p className="field-label budget-title">Optional budget range</p><div className="request-form-grid budget-grid"><select className="form-select" name="budgetCurrency" aria-label="Budget currency" defaultValue={importedValues?.budget_currency ?? importedValues?.budgetCurrency ?? reference.defaults.currency}>{reference.currencies.map((code) => <option key={code} value={code}>{code}</option>)}</select><input className="form-input" name="budgetMin" type="number" min="0" step="any" placeholder="Minimum" defaultValue={importedValues?.budget_min ?? importedValues?.budgetMin ?? ''} /><input className="form-input" name="budgetMax" type="number" min="0" step="any" placeholder="Maximum" defaultValue={importedValues?.budget_max ?? importedValues?.budgetMax ?? ''} /></div>
             <label className="field-label">Response deadline<input className="form-input" name="responseDeadline" type="datetime-local" required min={format(addHours(now, deadlineLimits.minHours), deadlineInputFormat)} max={format(addDays(now, deadlineLimits.maxDays), deadlineInputFormat)} defaultValue={format(addHours(now, deadlineLimits.defaultHours), deadlineInputFormat)} /></label>
             <label className="field-label">Who can see this request<select className="form-select" value={visibility} onChange={(event) => setVisibility(event.target.value)}>{reference.requestVisibilities.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
             {visibility !== 'open' && <SupplierInvitePicker selected={invitedSuppliers} onChange={setInvitedSuppliers} maxInvited={reference.limits.maxInvitedSuppliers} />}
-            {formError && <p className="auth-error" role="alert">{formError}</p>}
+            {formError && <p className={formError.startsWith('CRM request imported') ? 'import-success' : 'auth-error'} role={formError.startsWith('CRM request imported') ? 'status' : 'alert'}>{formError}</p>}
             <div className="modal-actions"><button type="button" className="secondary-button" onClick={onClose}>Cancel</button><button type="submit" className="primary-button" disabled={saving}>{saving ? 'Saving...' : 'Save draft and preview'}</button></div>
           </form>
+          </>
         )}
       </section>
     </div>
@@ -889,6 +1109,54 @@ function OfferComparison({ request, offers, onAward, onUndoAward, onShortlist, o
   );
 }
 
+function DeadlineExtensionModal({ request, onClose, onSave }) {
+  const { data: reference } = useReferenceData();
+  const [responseDeadline, setResponseDeadline] = useState('');
+  const [note, setNote] = useState('');
+  const [error, setError] = useState('');
+  const [saving, setSaving] = useState(false);
+  const now = new Date();
+  const deadlineLimits = reference?.limits.requestDeadline;
+  const inputFormat = "yyyy-MM-dd'T'HH:mm";
+  const currentDeadline = new Date(request.responseDeadline);
+  const minDeadline = deadlineLimits ? new Date(Math.max(currentDeadline.getTime(), addHours(now, deadlineLimits.minHours).getTime())) : currentDeadline;
+  const maxDeadline = deadlineLimits ? addDays(now, deadlineLimits.maxDays) : addDays(now, 30);
+
+  useEffect(() => {
+    if (!deadlineLimits || responseDeadline) return;
+    const suggested = new Date(Math.min(Math.max(currentDeadline.getTime() + deadlineLimits.minHours * 60 * 60 * 1000, minDeadline.getTime()), maxDeadline.getTime()));
+    setResponseDeadline(format(suggested, inputFormat));
+  }, [deadlineLimits, request.id]);
+
+  async function submit(event) {
+    event.preventDefault();
+    setError('');
+    const nextDeadline = new Date(responseDeadline);
+    if (Number.isNaN(nextDeadline.getTime()) || nextDeadline <= currentDeadline) {
+      setError('Choose a deadline later than the current deadline.');
+      return;
+    }
+    setSaving(true);
+    const failure = await onSave({ response_deadline: nextDeadline.toISOString(), note: note.trim() || null });
+    setSaving(false);
+    if (failure) setError(failure);
+  }
+
+  return (
+    <div className="modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
+      <section className="modal request-modal" role="dialog" aria-modal="true" aria-labelledby="deadline-modal-title">
+        <div className="modal-heading"><div><p className="eyebrow">AGENCY WORKSPACE / {request.requestCode}</p><h2 id="deadline-modal-title">Extend response deadline</h2></div><button className="icon-button" aria-label="Close dialog" onClick={onClose}><X size={18} /></button></div>
+        {!deadlineLimits ? <div className="empty-state">Loading deadline limits...</div> : <form className="request-form" onSubmit={submit}>
+          <label className="field-label">New response deadline<input className="form-input" type="datetime-local" value={responseDeadline} min={format(minDeadline, inputFormat)} max={format(maxDeadline, inputFormat)} onChange={(event) => setResponseDeadline(event.target.value)} required /></label>
+          <label className="field-label">Note for matched sellers<textarea className="form-input" value={note} onChange={(event) => setNote(event.target.value)} maxLength="500" placeholder="Optional update" /></label>
+          {error && <p className="auth-error" role="alert">{error}</p>}
+          <div className="modal-actions"><button type="button" className="secondary-button" onClick={onClose}>Cancel</button><button type="submit" className="primary-button" disabled={saving}>{saving ? 'Saving...' : 'Extend deadline'}</button></div>
+        </form>}
+      </section>
+    </div>
+  );
+}
+
 function TripChangeModal({ request, onClose, onSave }) {
   const { data: reference } = useReferenceData();
   const [dateMode, setDateMode] = useState(request.travelMonth ? 'month' : 'exact');
@@ -913,6 +1181,13 @@ function TripChangeModal({ request, onClose, onSave }) {
     const startDate = form.get('travelStartDate');
     const endDate = form.get('travelEndDate');
     const nights = dateMode === 'exact' ? differenceInCalendarDays(parseISO(endDate), parseISO(startDate)) : Number(form.get('nights'));
+    const childrenCount = Number(form.get('children') ?? 0);
+    const childAges = String(form.get('childAges') ?? '').split(/[\s,;]+/).filter(Boolean).map(Number);
+    const childRange = reference?.travellerTypes.find((traveller) => traveller.value === 'child');
+    if (childrenCount > 0 && (childAges.length !== childrenCount || childAges.some((age) => !Number.isInteger(age) || age < childRange.minAge || age > childRange.maxAge))) {
+      setError(`Enter one age between ${childRange.minAge} and ${childRange.maxAge} for each child.`);
+      return;
+    }
     if (nights < 1) {
       setError('Travel end must be after travel start.');
       return;
@@ -932,6 +1207,8 @@ function TripChangeModal({ request, onClose, onSave }) {
       adults: Number(form.get('adults')),
       children: Number(form.get('children')),
       infants: Number(form.get('infants')),
+      child_ages: childAges,
+      special_requests: String(form.get('specialRequests') ?? '').trim() || null,
       room_count: form.get('roomCount') ? Number(form.get('roomCount')) : null,
       response_deadline: deadline ? new Date(deadline).toISOString() : null,
       note: form.get('note') || null,
@@ -953,6 +1230,8 @@ function TripChangeModal({ request, onClose, onSave }) {
             {destinationsChanged && <p className="table-secondary">Changing the destination re-routes the lead: sellers outside the new area lose access unless they already sent an offer, and sellers in the new area are alerted. The lead type stays {labelFor(reference.requirementTypes, request.requirementType)}.</p>}
             <div className="request-form-grid"><label className="field-label">Date mode<select className="form-select" value={dateMode} onChange={(event) => setDateMode(event.target.value)}><option value="exact">Exact dates</option><option value="month">Month and nights</option></select></label>{dateMode === 'exact' ? <><label className="field-label">Arrival<input className="form-input" name="travelStartDate" type="date" min={format(now, 'yyyy-MM-dd')} defaultValue={request.travelStartDate ?? ''} required /></label><label className="field-label">Departure<input className="form-input" name="travelEndDate" type="date" min={format(now, 'yyyy-MM-dd')} defaultValue={request.travelEndDate ?? ''} required /></label></> : <><label className="field-label">Travel month<input className="form-input" name="travelMonth" type="month" min={format(now, 'yyyy-MM')} defaultValue={request.travelMonth ?? ''} required /></label><label className="field-label">Nights<input className="form-input" name="nights" type="number" min="1" max="90" defaultValue={request.nights} required /></label></>}
               <label className="field-label">Adults<input className="form-input" name="adults" type="number" min="1" max="100" defaultValue={request.adults} required /></label><label className="field-label">Children<input className="form-input" name="children" type="number" min="0" max="80" defaultValue={request.children} /></label><label className="field-label">Infants<input className="form-input" name="infants" type="number" min="0" max="40" defaultValue={request.infants} /></label><label className="field-label">Rooms<input className="form-input" name="roomCount" type="number" min="1" max="50" defaultValue={request.roomCount ?? ''} /></label></div>
+            <div className="request-form-grid"><label className="field-label">Child ages<input className="form-input" name="childAges" inputMode="numeric" defaultValue={request.childAges?.join(', ') ?? ''} placeholder="Comma-separated" /></label></div>
+            <label className="field-label">Special requests<textarea className="form-input" name="specialRequests" maxLength="2000" defaultValue={request.specialRequests ?? ''} /></label>
             <label className="field-label">{needsExtension ? 'New response deadline (required: sellers need time to re-confirm)' : 'Extend response deadline (optional)'}<input className="form-input" name="responseDeadline" type="datetime-local" required={needsExtension} min={format(earliestDeadline, deadlineInputFormat)} max={format(addDays(now, deadlineLimits.maxDays), deadlineInputFormat)} /></label>
             <label className="field-label">Note to sellers (optional)<textarea className="form-input" name="note" maxLength="500" placeholder="For example: client added one adult and moved arrival by a day" /></label>
             <small className="table-secondary">Do not include traveller names, contact details or links.</small>
@@ -1111,6 +1390,8 @@ function NotificationPopover({ notifications, unreadCount, loading, onClose, onR
 function pageSubtitle(page, role) {
   if (page === 'Security') return 'Manage authenticator sign-in and recovery codes.';
   if (page === 'Integrations') return 'Send marketplace events to your CRM as signed webhooks.';
+  if (page === 'Reports') return 'Track response, awards and savings against your request budgets.';
+  if (page === 'Performance') return 'Review offer outcomes, response speed, loss reasons and verified ratings.';
   if (page === 'Verification') return 'Upload business documents so sellers see your agency as verified.';
   if (page === 'Bookings') return role === 'agency'
     ? 'Confirm awarded offers, share guest details and track seller confirmations.'
@@ -1181,7 +1462,7 @@ function Metric({ label, value, note, icon: Icon, accent }) {
   );
 }
 
-function RequestWorkspace({ requests, loading, query, setQuery, statusFilter, setStatusFilter, onCreate, onOpenRequest }) {
+function RequestWorkspace({ requests, loading, query, setQuery, statusFilter, setStatusFilter, onCreate, onCloneRequest, onOpenRequest, onExtendDeadline, onCancelRequest }) {
   const filters = [{ label: 'All requests', value: 'all' }, { label: 'Open', value: 'open' }, { label: 'Closed', value: 'closed' }, { label: 'Awarded', value: 'awarded' }, { label: 'Expired', value: 'expired' }, { label: 'Draft', value: 'draft' }];
   return (
     <section className="surface-section full-section">
@@ -1194,12 +1475,12 @@ function RequestWorkspace({ requests, loading, query, setQuery, statusFilter, se
         </div>
         <label className="search-field"><Search size={16} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search requests" aria-label="Search requests" /></label>
       </div>
-      {loading ? <div className="empty-state">Loading requests...</div> : requests.length ? <RequestTable requests={requests} onOpenRequest={onOpenRequest} /> : <div className="empty-state"><FileText size={24} /><strong>No requests match</strong><span>Try another status or create a request.</span><button className="text-button" onClick={onCreate}><Plus size={15} />Create request</button></div>}
+      {loading ? <div className="empty-state">Loading requests...</div> : requests.length ? <RequestTable requests={requests} onOpenRequest={onOpenRequest} onCloneRequest={onCloneRequest} onExtendDeadline={onExtendDeadline} onCancelRequest={onCancelRequest} /> : <div className="empty-state"><FileText size={24} /><strong>No requests match</strong><span>Try another status or create a request.</span><button className="text-button" onClick={onCreate}><Plus size={15} />Create request</button></div>}
     </section>
   );
 }
 
-function RequestTable({ requests, compact = false, onOpenRequest }) {
+function RequestTable({ requests, compact = false, onOpenRequest, onCloneRequest, onExtendDeadline, onCancelRequest }) {
   return (
     <div className={`table-scroll ${compact ? 'compact-table' : ''}`}>
       <table className="request-table">
@@ -1215,7 +1496,7 @@ function RequestTable({ requests, compact = false, onOpenRequest }) {
               <td><span className="table-primary">{request.travelers}</span></td>
               <td><span className="offer-count">{Number(request.offers ?? 0).toString().padStart(2, '0')}</span><small className="table-secondary">responses</small></td>
               <td><span className={`status-pill ${request.status}`}><i />{request.status[0].toUpperCase()}{request.status.slice(1)}</span></td>
-              <td><button className="icon-button row-open" aria-label={`Open ${request.destination} request`} onClick={() => onOpenRequest?.(request)}><ArrowUpRight size={16} /></button></td>
+              <td className="request-row-actions">{onCloneRequest && <button className="icon-button" aria-label={`Copy ${request.destination} request`} title="Copy request to a new draft" onClick={() => onCloneRequest(request)}><Copy size={15} /></button>}{onExtendDeadline && request.status === 'open' && <button className="icon-button" aria-label={`Extend deadline for ${request.requestCode}`} title="Extend response deadline" onClick={() => onExtendDeadline(request)}><Clock3 size={15} /></button>}{onCancelRequest && ['draft', 'open', 'closed'].includes(request.status) && <button className="icon-button" aria-label={`Cancel ${request.requestCode}`} title="Cancel request" onClick={() => onCancelRequest(request)}><X size={15} /></button>}<button className="icon-button row-open" aria-label={`Open ${request.destination} request`} onClick={() => onOpenRequest?.(request)}><ArrowUpRight size={16} /></button></td>
             </tr>
           ))}
         </tbody>
@@ -1271,14 +1552,19 @@ function SupplierWorkspace() {
   const [search, setSearch] = useState('');
   const [country, setCountry] = useState('');
   const [page, setPage] = useState(0);
+  const [showFavorites, setShowFavorites] = useState(false);
   const [directory, setDirectory] = useState({ suppliers: [], pagination: { limit: 25, offset: 0, total: 0 } });
+  const [favoriteCount, setFavoriteCount] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [favoriteBusy, setFavoriteBusy] = useState('');
   const [error, setError] = useState('');
 
   useEffect(() => {
     let active = true;
     setLoading(true);
-    listMarketplaceSuppliers({ search, country, limit: 25, offset: page * 25 })
+    (showFavorites
+      ? listPreferredSuppliers().then((result) => ({ suppliers: result.suppliers.map((supplier) => ({ ...supplier, verified: supplier.isEligible, isFavorite: true })), pagination: { limit: 25, offset: 0, total: result.suppliers.length } }))
+      : listMarketplaceSuppliers({ search, country, limit: 25, offset: page * 25 }))
       .then((result) => {
         if (active) {
           setDirectory(result);
@@ -1288,7 +1574,32 @@ function SupplierWorkspace() {
       .catch((requestError) => active && setError(requestError.message))
       .finally(() => active && setLoading(false));
     return () => { active = false; };
-  }, [search, country, page]);
+  }, [search, country, page, showFavorites]);
+
+  useEffect(() => {
+    let active = true;
+    listPreferredSuppliers().then((result) => active && setFavoriteCount(result.suppliers.length)).catch(() => {});
+    return () => { active = false; };
+  }, [directory.suppliers]);
+
+  async function togglePreferred(supplier) {
+    setFavoriteBusy(supplier.organizationId);
+    setError('');
+    try {
+      await setPreferredSupplier(supplier.organizationId, !supplier.isFavorite);
+      if (showFavorites && supplier.isFavorite) {
+        setDirectory((current) => ({ ...current, suppliers: current.suppliers.filter((item) => item.organizationId !== supplier.organizationId), pagination: { ...current.pagination, total: Math.max(0, current.pagination.total - 1) } }));
+      } else {
+        setDirectory((current) => ({ ...current, suppliers: current.suppliers.map((item) => item.organizationId === supplier.organizationId ? { ...item, isFavorite: !supplier.isFavorite } : item) }));
+      }
+      const updated = await listPreferredSuppliers();
+      setFavoriteCount(updated.suppliers.length);
+    } catch (requestError) {
+      setError(requestError.message);
+    } finally {
+      setFavoriteBusy('');
+    }
+  }
 
   const suppliers = directory.suppliers;
   const total = directory.pagination.total;
@@ -1296,22 +1607,24 @@ function SupplierWorkspace() {
   return (
     <section className="surface-section full-section">
       <div className="section-heading request-list-heading">
-        <div><p className="eyebrow">DESTINATION PARTNERS</p><h2>Verified supplier directory <span className="heading-count">{total}</span></h2></div>
+        <div><p className="eyebrow">DESTINATION PARTNERS</p><h2>{showFavorites ? 'Preferred suppliers' : 'Verified supplier directory'} <span className="heading-count">{showFavorites ? favoriteCount : total}</span></h2></div>
       </div>
       <div className="request-toolbar">
         <label className="search-field"><Search size={16} /><input value={search} onChange={(event) => { setSearch(event.target.value); setPage(0); }} placeholder="Search company or destination" aria-label="Search suppliers" /></label>
         <label className="supplier-country-filter"><span>Country</span><input className="form-input" value={country} onChange={(event) => { setCountry(event.target.value.toUpperCase().slice(0, 2)); setPage(0); }} placeholder="ISO code" aria-label="Filter by country code" maxLength="2" /></label>
+        <label className="preferred-filter"><input type="checkbox" checked={showFavorites} onChange={(event) => { setShowFavorites(event.target.checked); setPage(0); }} />Preferred only</label>
       </div>
       {error && <div className="auth-error" role="alert">{error}</div>}
       <div className="supplier-grid">
         {suppliers.map((supplier) => (
           <article className="supplier-row" key={supplier.organizationId}>
             <span className="supplier-avatar blue"><Building2 size={20} /></span>
-            <div className="supplier-info"><div className="supplier-title"><strong>{supplier.name}</strong><span className="verified-mark" title="Verified supplier"><BadgeCheck size={15} /></span></div><span><MapPin size={13} />{supplier.propertyCity ? `${supplier.propertyCity}, ` : ''}${supplier.countryCode}</span><small>{supplier.type === 'dmc' ? `Coverage: ${supplier.coverageDestinations.join(', ') || 'Not specified'}` : 'Hotel partner'}</small></div>
+            <div className="supplier-info"><div className="supplier-title"><strong>{supplier.name}{supplier.isFavorite && <em className="preferred-label">Preferred</em>}</strong>{supplier.verified ? <span className="verified-mark" title="Verified supplier"><BadgeCheck size={15} /></span> : <span className="supplier-unavailable">Unavailable</span>}</div><span><MapPin size={13} />{supplier.propertyCity ? `${supplier.propertyCity}, ` : ''}${supplier.countryCode}</span><small>{supplier.type === 'dmc' ? `Coverage: ${supplier.coverageDestinations.join(', ') || 'Not specified'}` : 'Hotel partner'}</small></div>
+            <button className={`icon-button supplier-favorite-button ${supplier.isFavorite ? 'is-favorite' : ''}`} aria-label={`${supplier.isFavorite ? 'Remove' : 'Add'} ${supplier.name} ${supplier.isFavorite ? 'from' : 'to'} preferred suppliers`} title={supplier.isFavorite ? 'Remove preferred supplier' : 'Save as preferred supplier'} disabled={favoriteBusy === supplier.organizationId} onClick={() => togglePreferred(supplier)}><Star size={16} fill={supplier.isFavorite ? 'currentColor' : 'none'} /></button>
           </article>
         ))}
       </div>
-      {!loading && suppliers.length === 0 && <div className="empty-state"><UsersRound size={23} /><strong>No verified suppliers found</strong><span>Try another destination or check back as partners complete verification.</span></div>}
+      {!loading && suppliers.length === 0 && <div className="empty-state"><UsersRound size={23} /><strong>{showFavorites ? 'No preferred suppliers yet' : 'No verified suppliers found'}</strong><span>{showFavorites ? 'Save a supplier from the directory to find it here and invite it faster.' : 'Try another destination or check back as partners complete verification.'}</span></div>}
       {loading && <div className="empty-state">Loading verified suppliers...</div>}
       <div className="supplier-pagination"><span>{total ? `${directory.pagination.offset + 1}-${Math.min(directory.pagination.offset + suppliers.length, total)} of ${total}` : '0 suppliers'}</span><div><button className="secondary-button" disabled={page === 0 || loading} onClick={() => setPage((current) => Math.max(0, current - 1))}>Previous</button><button className="secondary-button" disabled={loading || (page + 1) * 25 >= total} onClick={() => setPage((current) => current + 1)}>Next</button></div></div>
     </section>
