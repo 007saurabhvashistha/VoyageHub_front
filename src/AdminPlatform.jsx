@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import Markdown from 'react-markdown';
-import { DatabaseBackup, Eye, FileText, Hotel, MapPin, Plus, RefreshCw, Search, SlidersHorizontal, Star, Upload } from 'lucide-react';
-import { createAdminDestination, decideHotelProperty, getAdminDestination, getDestinationLevels, getOperationsStatus, getPlatformSettings, importFeaturedDestinations, listAdminDestinations, listAdminLegalDocuments, listPendingHotelProperties, publishLegalDocument, saveDestinationLevels, updateAdminDestination, updatePlatformSetting } from './api.js';
+import { DatabaseBackup, Eye, FileText, Hotel, MapPin, Plus, RefreshCw, Search, ShieldCheck, SlidersHorizontal, Star, Upload } from 'lucide-react';
+import { createAdminDestination, decideHotelProperty, decidePropertyOwnership, getAdminDestination, getDestinationLevels, getOperationsStatus, getPlatformSettings, importFeaturedDestinations, listAdminDestinations, listAdminLegalDocuments, listPendingHotelProperties, publishLegalDocument, saveDestinationLevels, updateAdminDestination, updatePlatformSetting } from './api.js';
 import { DestinationPicker } from './DestinationPicker.jsx';
 import { labelFor, useReferenceData } from './referenceData.js';
 
@@ -336,18 +336,20 @@ export function AdminHotelPropertyQueue() {
 
   useEffect(() => { refresh(); }, []);
 
-  async function decide(property, decision) {
-    setBusy(property.id);
+  async function decideOwnership(property, decision) {
+    setBusy(`ownership-${property.id}`);
     setError('');
     try {
-      await decideHotelProperty(property.id, decision, reasons[property.id].trim());
-      setProperties((current) => current.filter((item) => item.id !== property.id));
+      await decidePropertyOwnership(property.id, decision, reasons[property.id]?.trim() || 'Reviewed proof of ownership document.');
+      await refresh();
     } catch (requestError) {
       setError(requestError.message);
     } finally {
       setBusy('');
     }
   }
+
+  const { data: reference } = useReferenceData();
 
   return (
     <>
@@ -359,10 +361,17 @@ export function AdminHotelPropertyQueue() {
           return <article className="verification-row" key={property.id}>
             <div className="verification-main">
               <div className="verification-title"><span className="role-option-icon"><Hotel size={17} /></span><div><h2>{property.name}</h2><span>{property.organizationName} / account {property.sellerStatus}</span></div></div>
-              <div className="verification-facts"><span><MapPin size={14} />{property.destination?.label ?? '-'}</span>{property.roomCount && <span>{property.roomCount} rooms</span>}</div>
+              <div className="verification-facts"><span><MapPin size={14} />{property.destination?.label ?? '-'}</span>{property.roomCount && <span>{property.roomCount} rooms</span>}<span><ShieldCheck size={14} /> Ownership: {labelFor(reference?.hotelOwnershipCheckStatuses, property.ownershipCheckStatus)}</span>{property.ownershipProofType && <span>Proof type: {labelFor(reference?.ownershipProofTypes, property.ownershipProofType)}</span>}</div>
+              {property.ownershipRejectionReason && <p className="outcome-reason">Previous rejection: {property.ownershipRejectionReason}</p>}
               <label className="field-label">Decision reason<textarea value={reasons[property.id] ?? ''} onChange={(event) => setReasons((current) => ({ ...current, [property.id]: event.target.value }))} minLength="5" maxLength="500" placeholder="Shared with the hotel account" /></label>
             </div>
-            <div className="verification-actions"><button className="secondary-button reject-button" disabled={busy === property.id || reason.length < 5} onClick={() => decide(property, 'rejected')}>Reject</button><button className="primary-button" disabled={busy === property.id || reason.length < 5} onClick={() => decide(property, 'approved')}>Approve</button></div>
+            <div className="verification-actions">
+              {property.ownershipCheckStatus === 'evidence_ready' && (
+                <button className="secondary-button" disabled={busy === `ownership-${property.id}` || reason.length < 5} onClick={() => decideOwnership(property, 'verified')}>Verify Ownership</button>
+              )}
+              <button className="secondary-button reject-button" disabled={busy === property.id || reason.length < 5} onClick={() => decide(property, 'rejected')}>Reject Hotel</button>
+              <button className="primary-button" disabled={busy === property.id || reason.length < 5} onClick={() => decide(property, 'approved')}>Approve Hotel</button>
+            </div>
           </article>;
         }) : <div className="empty-state"><Hotel size={22} /><strong>No hotels waiting</strong><span>New and moved hotels appear here for review.</span></div>}
       </section>

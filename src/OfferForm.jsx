@@ -345,7 +345,7 @@ export function OfferDetails({ offer }) {
   return (
     <>
       {(offer.comparisonLabels?.length > 0 || offer.comparisonTotalMinor != null || offer.responseTimeMinutes != null) && <div className="comparison-meta">
-        {offer.comparisonLabels?.map((label) => <span className="status-pill open" key={label}><i />{labelFor(reference?.comparisonLabels, label)}</span>)}
+        {offer.comparisonLabels?.map((label) => <span className={`lead-badge badge-${label}`} key={label}>{labelFor(reference?.comparisonLabels, label)}</span>)}
         {offer.comparisonTotalMinor != null
           ? <strong>{formatMinor(offer.comparisonTotalMinor, offer.comparisonCurrency)} comparison total</strong>
           : <small>Comparison currency conversion unavailable</small>}

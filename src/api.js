@@ -751,3 +751,11 @@ export function uploadBookingVoucher(awardId, file) {
 export function createVoucherDownloadUrl(awardId, voucherId) {
   return request(`/v1/bookings/${awardId}/vouchers/${voucherId}/download-url`, { method: 'POST', body: JSON.stringify({}) }, true);
 }
+
+export function linkPropertyProof(propertyId, documentId, proofType) {
+  return request(`/v1/hotel-properties/${propertyId}/proof`, { method: 'POST', body: JSON.stringify({ document_id: documentId, proof_type: proofType }) }, true);
+}
+
+export function decidePropertyOwnership(propertyId, decision, reason) {
+  return request(`/v1/admin/hotel-properties/${propertyId}/ownership-review`, { method: 'POST', body: JSON.stringify({ decision, reason }) }, true);
+}

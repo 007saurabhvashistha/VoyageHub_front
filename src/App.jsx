@@ -1030,6 +1030,7 @@ function OfferComparison({ request, offers, onAward, onUndoAward, onShortlist, o
   const [negotiationTarget, setNegotiationTarget] = useState(null);
   const [notSelectedReason, setNotSelectedReason] = useState('');
   const [awarding, setAwarding] = useState(false);
+  const [sortBy, setSortBy] = useState('price_asc');
   const canAwardRole = useCan('request.award');
   const canAward = ['open', 'closed'].includes(request.status) && canAwardRole;
   const canChangeTrip = useCan('request.write') && request.status === 'open';
@@ -1063,6 +1064,34 @@ function OfferComparison({ request, offers, onAward, onUndoAward, onShortlist, o
     const offer = offers.find((item) => item.id === offerId);
     if (offer) setAwardSelections((current) => [...current, { offer, option: offer.options?.find((item) => item.id === optionId) ?? null }]);
   }
+
+  const sortedOffers = [...offers].sort((left, right) => {
+    if (sortBy === 'price_asc') {
+      const leftPrice = left.comparisonTotalMinor ?? left.estimatedTotalMinor ?? left.totalPriceMinor ?? 0;
+      const rightPrice = right.comparisonTotalMinor ?? right.estimatedTotalMinor ?? right.totalPriceMinor ?? 0;
+      return leftPrice - rightPrice;
+    }
+    if (sortBy === 'price_desc') {
+      const leftPrice = left.comparisonTotalMinor ?? left.estimatedTotalMinor ?? left.totalPriceMinor ?? 0;
+      const rightPrice = right.comparisonTotalMinor ?? right.estimatedTotalMinor ?? right.totalPriceMinor ?? 0;
+      return rightPrice - leftPrice;
+    }
+    if (sortBy === 'rating_desc') {
+      const rLeft = left.sellerRatingAverage ?? -1;
+      const rRight = right.sellerRatingAverage ?? -1;
+      if (rRight !== rLeft) return rRight - rLeft;
+      return (right.sellerRatingCount ?? 0) - (left.sellerRatingCount ?? 0);
+    }
+    if (sortBy === 'response_time_asc') {
+      const tLeft = left.sellerResponseTimeMinutes ?? left.responseTimeMinutes ?? 999999;
+      const tRight = right.sellerResponseTimeMinutes ?? right.responseTimeMinutes ?? 999999;
+      return tLeft - tRight;
+    }
+    if (sortBy === 'inclusions_desc') {
+      return (right.inclusions?.length ?? 0) - (left.inclusions?.length ?? 0);
+    }
+    return 0;
+  });
 
   return (
     <div className="modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
@@ -1100,9 +1129,87 @@ function OfferComparison({ request, offers, onAward, onUndoAward, onShortlist, o
             if (!failure) setNegotiationTarget(null);
             return failure;
           }} />
-        ) : offers.length ? <div className="comparison-list">{offers.map((offer) => <article className="comparison-offer" key={offer.id}><div><strong>{offer.sellerName}</strong>{offer.matchType && offer.matchType !== 'full' && <span className={`lead-badge match-${offer.matchType}`}>{labelFor(reference?.matchTypes, offer.matchType)}</span>}<small>{offer.kind === 'hotel_room' ? `${offer.hotelPropertyName ? `${offer.hotelPropertyName} / ` : ''}${offer.roomType} / ${offer.roomCount ?? 1} room(s)` : 'Land package'} · valid through {new Date(offer.validityUntil).toLocaleDateString()}</small><span>{offer.inclusions.map((item) => labelFor(reference?.offerInclusions, item)).join(', ')}</span><OfferDetails offer={offer} /><OfferOptionList offer={offer} reference={reference} canAward={awardable(offer)} onAward={(option) => startAward(offer, option)} />{offer.openNegotiation && <span className="status-pill draft"><i />{labelFor(reference?.negotiationKinds, offer.openNegotiation.kind)} sent{offer.openNegotiation.counterPriceMinor != null ? `: ${formatMinor(offer.openNegotiation.counterPriceMinor, offer.currency)}` : ''}{offer.openNegotiation.optionLabel ? ` (${offer.openNegotiation.optionLabel})` : ''}, waiting for the seller</span>}</div><div className="comparison-price-block">{offer.optionLabel && <small>{offer.optionLabel}</small>}<strong className="comparison-price">{formatOfferPrice(offer)}</strong>{offer.kind === 'hotel_room' && offer.estimatedTotalMinor != null && <small>Est. stay {formatMinor(offer.estimatedTotalMinor, offer.currency)}</small>}{offer.perTravellerMinor != null && <small>{formatMinor(offer.perTravellerMinor, offer.currency)} per traveller ({offer.travellers})</small>}</div><div className="comparison-actions">{offer.needsReconfirmation && <span className="status-pill draft" title="The seller has not yet confirmed this price for the updated trip."><i />Awaiting re-confirmation</span>}{canWriteRequest && ['open', 'closed'].includes(request.status) && ['submitted', 'shortlisted'].includes(offer.status) && <button className="secondary-button" onClick={() => onShortlist(offer, offer.status !== 'shortlisted')}>{offer.status === 'shortlisted' ? 'Remove shortlist' : 'Shortlist'}</button>}{canMessage && <button className="secondary-button" onClick={() => onMessage(offer)}><MessageSquareText size={14} />Message</button>}{canNegotiate && ['submitted', 'shortlisted'].includes(offer.status) && (offer.openNegotiation
-          ? <button className="secondary-button" onClick={() => onWithdrawNegotiation(offer)}>Withdraw request</button>
-          : <button className="secondary-button" onClick={() => setNegotiationTarget(offer)}>Negotiate</button>)}{awardable(offer) && <button className="primary-button" disabled={offer.needsReconfirmation} onClick={() => startAward(offer, null)}>{offer.options?.length ? 'Award main option' : 'Award offer'}</button>}<button className="text-button report-link" onClick={() => onReport(offer)}><Flag size={13} />Report</button></div></article>)}</div> : <div className="empty-state"><MessageSquareText size={22} /><strong>No verified offers yet</strong><span>Offers from verified sellers will appear here.</span></div>}
+        ) : offers.length ? (
+          <>
+            <div className="comparison-toolbar" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', margin: '8px 0 12px 0' }}>
+              <span style={{ fontSize: '12px', color: '#4B5563', fontWeight: 500 }}>
+                {sortedOffers.length} {sortedOffers.length === 1 ? 'offer' : 'offers'} received
+              </span>
+              <label style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '12px', color: '#4B5563' }}>
+                <ArrowDownUp size={14} />
+                Sort:
+                <select
+                  className="form-select"
+                  style={{ padding: '3px 8px', fontSize: '11px', width: 'auto' }}
+                  value={sortBy}
+                  onChange={(e) => setSortBy(e.target.value)}
+                >
+                  <option value="price_asc">Lowest price</option>
+                  <option value="price_desc">Highest price</option>
+                  <option value="rating_desc">Highest seller rating</option>
+                  <option value="response_time_asc">Fastest response time</option>
+                  <option value="inclusions_desc">Most inclusions</option>
+                </select>
+              </label>
+            </div>
+            <div className="comparison-list">
+              {sortedOffers.map((offer) => (
+                <article className="comparison-offer" key={offer.id}>
+                  <div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                      <strong>{offer.sellerName}</strong>
+                      {offer.sellerRatingAverage != null ? (
+                        <span className="seller-rating-pill" style={{ display: 'inline-flex', alignItems: 'center', gap: '3px', fontSize: '11px', color: '#D97706', fontWeight: 600, background: '#FEF3C7', padding: '1px 6px', borderRadius: '12px' }}>
+                          <Star size={11} fill="#F59E0B" color="#F59E0B" />
+                          {Number(offer.sellerRatingAverage).toFixed(1)} ({offer.sellerRatingCount ?? 0})
+                        </span>
+                      ) : (
+                        <span style={{ fontSize: '10px', color: '#9CA3AF' }}>No ratings yet</span>
+                      )}
+                      {(offer.sellerResponseTimeMinutes != null || offer.responseTimeMinutes != null) && (
+                        <span className="seller-response-pill" style={{ display: 'inline-flex', alignItems: 'center', gap: '3px', fontSize: '10px', color: '#4B5563', background: '#F3F4F6', padding: '1px 6px', borderRadius: '12px' }}>
+                          <Clock3 size={11} />
+                          ~{offer.sellerResponseTimeMinutes ?? offer.responseTimeMinutes}m reply
+                        </span>
+                      )}
+                      {offer.matchType && offer.matchType !== 'full' && (
+                        <span className={`lead-badge match-${offer.matchType}`}>
+                          {labelFor(reference?.matchTypes, offer.matchType)}
+                        </span>
+                      )}
+                      {(offer.comparisonLabels || []).map((labelKey) => (
+                        <span key={labelKey} className={`lead-badge badge-${labelKey}`}>
+                          {labelFor(reference?.comparisonLabels, labelKey) || labelKey}
+                        </span>
+                      ))}
+                    </div>
+                    <small>{offer.kind === 'hotel_room' ? `${offer.hotelPropertyName ? `${offer.hotelPropertyName} / ` : ''}${offer.roomType} / ${offer.roomCount ?? 1} room(s)` : 'Land package'} · valid through {new Date(offer.validityUntil).toLocaleDateString()}</small>
+                    <span>{offer.inclusions.map((item) => labelFor(reference?.offerInclusions, item)).join(', ')}</span>
+                    <OfferDetails offer={offer} />
+                    <OfferOptionList offer={offer} reference={reference} canAward={awardable(offer)} onAward={(option) => startAward(offer, option)} />
+                    {offer.openNegotiation && <span className="status-pill draft"><i />{labelFor(reference?.negotiationKinds, offer.openNegotiation.kind)} sent{offer.openNegotiation.counterPriceMinor != null ? `: ${formatMinor(offer.openNegotiation.counterPriceMinor, offer.currency)}` : ''}{offer.openNegotiation.optionLabel ? ` (${offer.openNegotiation.optionLabel})` : ''}, waiting for the seller</span>}
+                  </div>
+                  <div className="comparison-price-block">
+                    {offer.optionLabel && <small>{offer.optionLabel}</small>}
+                    <strong className="comparison-price">{formatOfferPrice(offer)}</strong>
+                    {offer.kind === 'hotel_room' && offer.estimatedTotalMinor != null && <small>Est. stay {formatMinor(offer.estimatedTotalMinor, offer.currency)}</small>}
+                    {offer.perTravellerMinor != null && <small>{formatMinor(offer.perTravellerMinor, offer.currency)} per traveller ({offer.travellers})</small>}
+                  </div>
+                  <div className="comparison-actions">
+                    {offer.needsReconfirmation && <span className="status-pill draft" title="The seller has not yet confirmed this price for the updated trip."><i />Awaiting re-confirmation</span>}
+                    {canWriteRequest && ['open', 'closed'].includes(request.status) && ['submitted', 'shortlisted'].includes(offer.status) && <button className="secondary-button" onClick={() => onShortlist(offer, offer.status !== 'shortlisted')}>{offer.status === 'shortlisted' ? 'Remove shortlist' : 'Shortlist'}</button>}
+                    {canMessage && <button className="secondary-button" onClick={() => onMessage(offer)}><MessageSquareText size={14} />Message</button>}
+                    {canNegotiate && ['submitted', 'shortlisted'].includes(offer.status) && (offer.openNegotiation
+                      ? <button className="secondary-button" onClick={() => onWithdrawNegotiation(offer)}>Withdraw request</button>
+                      : <button className="secondary-button" onClick={() => setNegotiationTarget(offer)}>Negotiate</button>)}
+                    {awardable(offer) && <button className="primary-button" disabled={offer.needsReconfirmation} onClick={() => startAward(offer, null)}>{offer.options?.length ? 'Award main option' : 'Award offer'}</button>}
+                    <button className="text-button report-link" onClick={() => onReport(offer)}><Flag size={13} />Report</button>
+                  </div>
+                </article>
+              ))}
+            </div>
+          </>
+        ) : <div className="empty-state"><MessageSquareText size={22} /><strong>No verified offers yet</strong><span>Offers from verified sellers will appear here.</span></div>}
         <p className="privacy-note">Awarding does not confirm a booking or release guest details.</p>
       </section>
     </div>

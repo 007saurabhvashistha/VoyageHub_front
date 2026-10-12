@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
-import { BedDouble, Bell, Check, MapPin, Plus, Trash2, Upload } from 'lucide-react';
-import { createHotelProperty, createHotelPropertyPhotoUrl, deleteHotelPropertyPhoto, getAlertPreferences, listHotelProperties, saveAlertPreferences, updateHotelProperty, uploadHotelPropertyPhoto } from './api.js';
+import { BedDouble, Bell, Check, FileText, MapPin, Plus, ShieldCheck, Trash2, Upload } from 'lucide-react';
+import { createHotelProperty, createHotelPropertyPhotoUrl, deleteHotelPropertyPhoto, getAlertPreferences, getVerificationDocuments, linkPropertyProof, listHotelProperties, saveAlertPreferences, updateHotelProperty, uploadHotelPropertyPhoto } from './api.js';
 import { DestinationPicker } from './DestinationPicker.jsx';
 import { labelFor, useReferenceData } from './referenceData.js';
 import { useCan } from './capabilities.js';
@@ -97,6 +97,42 @@ export function HotelPropertiesManager() {
     }
   }
 
+  const [proofTarget, setProofTarget] = useState(null);
+  const [availableDocs, setAvailableDocs] = useState([]);
+  const [proofDocId, setProofDocId] = useState('');
+  const [proofType, setProofType] = useState('property_deed');
+  const [submittingProof, setSubmittingProof] = useState(false);
+
+  async function openProofModal(property) {
+    setError('');
+    try {
+      const docsRes = await getVerificationDocuments();
+      const cleanProofDocs = (docsRes.documents ?? []).filter((doc) => doc.documentType === 'property_proof' && doc.scanStatus === 'clean');
+      setAvailableDocs(cleanProofDocs);
+      setProofTarget(property);
+      setProofDocId(property.propertyProofDocumentId || cleanProofDocs[0]?.id || '');
+      setProofType(property.ownershipProofType || 'property_deed');
+    } catch (requestError) {
+      setError(requestError.message);
+    }
+  }
+
+  async function submitProof(event) {
+    event.preventDefault();
+    if (!proofDocId) return setError('Choose an uploaded proof document.');
+    setSubmittingProof(true);
+    setError('');
+    try {
+      await linkPropertyProof(proofTarget.id, proofDocId, proofType);
+      setProofTarget(null);
+      await load();
+    } catch (requestError) {
+      setError(requestError.message);
+    } finally {
+      setSubmittingProof(false);
+    }
+  }
+
   return (
     <div className="hotel-properties">
       <div className="section-heading"><div><p className="eyebrow">MY HOTELS</p><h2>Properties <span className="heading-count">{properties.length}</span></h2></div></div>
@@ -106,10 +142,20 @@ export function HotelPropertiesManager() {
           <td><strong>{property.name}</strong></td>
           <td><MapPin size={13} /> {property.destination?.label ?? '-'}</td>
           <td>{property.starCategory ? labelFor(reference?.hotelCategories, property.starCategory) : 'Category not set'}{property.roomCount ? ` / ${property.roomCount} rooms` : ''}{property.roomTypes?.length ? <small>{property.roomTypes.join(', ')}</small> : null}{property.mealPlans?.length ? <small>{property.mealPlans.map((meal) => labelFor(reference?.mealPlans, meal)).join(', ')}</small> : null}{property.facilities?.length ? <small>{property.facilities.map((facility) => labelFor(reference?.hotelFacilities, facility)).join(', ')}</small> : null}<div className="hotel-photo-strip">{property.photos?.map((photo) => photo.url ? <figure key={photo.id}><img src={photo.url} alt={photo.filename} /><button className="icon-button" aria-label={`Remove ${photo.filename}`} disabled={!canManage} onClick={() => removePhoto(property, photo)}><Trash2 size={13} /></button></figure> : <small key={photo.id}>{photo.filename} / {labelFor(reference?.documentScanStatuses, photo.scanStatus)}</small>)}</div></td>
-          <td><span className={`status-pill ${property.verificationStatus === 'approved' && property.active ? 'open' : ''}`}><i />{property.active ? labelFor(reference?.hotelPropertyStatuses, property.verificationStatus) : 'Inactive'}</span><small>{labelFor(reference?.hotelOwnershipCheckStatuses, property.ownershipCheckStatus)}</small>{property.verificationReason && <small className="outcome-reason">{property.verificationReason}</small>}</td>
-          <td><button className="text-button" disabled={!canManage} onClick={() => edit(property)}>Edit</button><button className="text-button" disabled={!canManage} onClick={() => toggleActive(property)}>{property.active ? 'Deactivate' : 'Activate'}</button><label className="icon-button" title="Upload hotel photo"><Upload size={14} /><input type="file" accept="image/jpeg,image/png" className="visually-hidden" disabled={!canManage || (property.photos?.length ?? 0) >= (reference?.limits.maxHotelPropertyPhotos ?? 0)} onChange={(event) => { uploadPhoto(property, event.target.files?.[0]); event.target.value = ''; }} /></label></td>
+          <td><span className={`status-pill ${property.verificationStatus === 'approved' && property.active ? 'open' : ''}`}><i />{property.active ? labelFor(reference?.hotelPropertyStatuses, property.verificationStatus) : 'Inactive'}</span><small>Ownership: {labelFor(reference?.hotelOwnershipCheckStatuses, property.ownershipCheckStatus)}</small>{property.ownershipProofType && <small>Proof: {labelFor(reference?.ownershipProofTypes, property.ownershipProofType)}</small>}{property.ownershipRejectionReason && <small className="outcome-reason">Reason: {property.ownershipRejectionReason}</small>}</td>
+          <td><button className="text-button" disabled={!canManage} onClick={() => edit(property)}>Edit</button><button className="text-button" disabled={!canManage} onClick={() => openProofModal(property)}><ShieldCheck size={13} /> Proof</button><button className="text-button" disabled={!canManage} onClick={() => toggleActive(property)}>{property.active ? 'Deactivate' : 'Activate'}</button><label className="icon-button" title="Upload hotel photo"><Upload size={14} /><input type="file" accept="image/jpeg,image/png" className="visually-hidden" disabled={!canManage || (property.photos?.length ?? 0) >= (reference?.limits.maxHotelPropertyPhotos ?? 0)} onChange={(event) => { uploadPhoto(property, event.target.files?.[0]); event.target.value = ''; }} /></label></td>
         </tr>)}
       </tbody></table></div>}
+      {proofTarget && <form className="seller-profile-form hotel-property-form" onSubmit={submitProof}>
+        <p className="field-label">Submit ownership proof for <strong>{proofTarget.name}</strong></p>
+        {availableDocs.length ? <>
+          <div className="request-form-grid">
+            <label className="field-label">Ownership proof type<select className="form-select" value={proofType} onChange={(event) => setProofType(event.target.value)}>{(reference?.ownershipProofTypes ?? []).map((type) => <option key={type.value} value={type.value}>{type.label}</option>)}</select></label>
+            <label className="field-label">Select uploaded proof document<select className="form-select" value={proofDocId} onChange={(event) => setProofDocId(event.target.value)} required><option value="" disabled>Select document</option>{availableDocs.map((doc) => <option key={doc.id} value={doc.id}>{doc.originalFilename} (uploaded {new Date(doc.createdAt).toLocaleDateString()})</option>)}</select></label>
+          </div>
+          <div className="modal-actions"><button type="button" className="secondary-button" onClick={() => setProofTarget(null)}>Cancel</button><button className="primary-button" type="submit" disabled={submittingProof}>{submittingProof ? 'Saving...' : 'Submit ownership proof'}</button></div>
+        </> : <div className="empty-state"><FileText size={18} /><strong>No scanned property proof documents found</strong><span>Upload a clean "Proof of property ownership or management" document in your Verification Documents tab first.</span><button type="button" className="secondary-button" onClick={() => setProofTarget(null)}>Close</button></div>}
+      </form>}
       {canManage && <form className="seller-profile-form hotel-property-form" onSubmit={submit}>
         <p className="field-label">{editingId ? 'Edit hotel' : 'Add a hotel'}</p>
         <div className="request-form-grid">
